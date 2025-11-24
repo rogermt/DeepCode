@@ -26,6 +26,7 @@ site/
 *.logfire
 *.coverage/
 log/
+logs/
 
 # Caches
 .cache/
@@ -64,3 +65,6 @@ run_indexer_with_filtering.py
 
 # Cline files
 memory-bank/
+
+# Ignore local lab scripts
+deepcode_lab/
