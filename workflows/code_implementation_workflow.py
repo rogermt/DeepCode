@@ -36,6 +36,69 @@ from config.mcp_tool_definitions import get_mcp_tools
 from utils.llm_utils import get_preferred_llm_class, get_default_models
 # DialogueLogger removed - no longer needed
 
+from mcp_agent.workflows.llm.augmented_llm_openai import OpenAIAugmentedLLM  
+from mcp.types import TextContent, ImageContent, EmbeddedResource, TextResourceContents  
+from openai.types.chat import ChatCompletionToolMessageParam  
+
+  
+# Store original method  
+_original_execute_tool_call = OpenAIAugmentedLLM.execute_tool_call  
+  
+async def patched_execute_tool_call(self, tool_call):  
+    """  
+    Patched version that converts content arrays to plain strings  
+    for OpenAI-compatible models like Cerebras.  
+    """  
+    tool_name = tool_call.function.name  
+    tool_args_str = tool_call.function.arguments  
+    tool_call_id = tool_call.id  
+    tool_args = {}  
+      
+    try:  
+        if tool_args_str:  
+            tool_args = json.loads(tool_args_str)  
+    except json.JSONDecodeError as e:  
+        return ChatCompletionToolMessageParam(  
+            role="tool",  
+            tool_call_id=tool_call_id,  
+            content=f"Invalid JSON provided in tool call arguments for '{tool_name}'. Failed to load JSON: {str(e)}",  
+        )  
+      
+    from mcp.types import CallToolRequest, CallToolRequestParams  
+    tool_call_request = CallToolRequest(  
+        method="tools/call",  
+        params=CallToolRequestParams(name=tool_name, arguments=tool_args),  
+    )  
+      
+    result = await self.call_tool(  
+        request=tool_call_request, tool_call_id=tool_call_id  
+    )  
+      
+    # Convert content blocks to plain string  
+    text_parts = []  
+    for content in result.content:  
+        if isinstance(content, TextContent):  
+            text_parts.append(content.text)  
+        elif isinstance(content, ImageContent):  
+            text_parts.append(f"[Image: {content.mimeType}]")  
+        elif isinstance(content, EmbeddedResource):  
+            if isinstance(content.resource, TextResourceContents):  
+                text_parts.append(content.resource.text)  
+            else:  
+                text_parts.append(f"[Resource: {content.resource.mimeType}]")  
+      
+    # Join all text parts with newlines  
+    content_str = "\n\n".join(text_parts) if text_parts else ""  
+      
+    return ChatCompletionToolMessageParam(  
+        role="tool",  
+        tool_call_id=tool_call_id,  
+        content=content_str,  # Plain string instead of array  
+    )  
+  
+# Apply the monkey-patch  
+OpenAIAugmentedLLM.execute_tool_call = patched_execute_tool_call
+
 
 class CodeImplementationWorkflow:
     """
@@ -1003,7 +1066,8 @@ Requirements:
 
         openai_messages = [{"role": "system", "content": system_message}]
         openai_messages.extend(messages)
-
+        
+        
         # Retry mechanism for API calls
         max_retries = 3
         retry_delay = 2  # seconds

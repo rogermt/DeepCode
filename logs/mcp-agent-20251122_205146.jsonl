@@ -1,0 +1,7 @@
+{"level":"INFO","timestamp":"2025-11-22T20:51:46.933524","namespace":"mcp_agent.core.context","message":"Configuring logger with level: info"}
+{"level":"INFO","timestamp":"2025-11-22T20:51:46.964522","namespace":"mcp_agent.paper_to_code","message":"Loading subagents from configuration..."}
+{"level":"INFO","timestamp":"2025-11-22T20:51:46.965273","namespace":"mcp_agent.paper_to_code","message":"MCPApp initialized","data":{"data":{"progress_action":"Running","target":"paper_to_code","agent_name":"mcp_application_loop","session_id":"21d81dca-9657-488b-8585-369345665cc7"}}}
+{"level":"ERROR","timestamp":"2025-11-22T20:51:49.780125","namespace":"mcp_agent.executor.executor","message":"Error executing task: 503 - Tunnel Unavailable"}
+{"level":"ERROR","timestamp":"2025-11-22T20:51:49.780192","namespace":"mcp_agent.workflows.llm.augmented_llm_openai.ResearchAnalyzerAgent","message":"Error: 503 - Tunnel Unavailable"}
+{"level":"INFO","timestamp":"2025-11-22T20:51:49.790721","namespace":"mcp_agent.mcp.mcp_aggregator.ResearchAnalyzerAgent","message":"Last aggregator closing, shutting down all persistent connections..."}
+{"level":"INFO","timestamp":"2025-11-22T20:51:49.790938","namespace":"mcp_agent.mcp.mcp_connection_manager","message":"Disconnecting all persistent server connections..."}

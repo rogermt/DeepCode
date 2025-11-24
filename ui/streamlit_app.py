@@ -6,6 +6,7 @@ Streamlit Web Interface Main Application File
 
 import os
 import sys
+import weave
 
 # Disable .pyc file generation
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -30,6 +31,7 @@ def main():
     sidebar_info = main_layout()
 
     # Additional global logic can be added here if needed
+    weave.init('deepcode-streamlit')
 
     return sidebar_info
 

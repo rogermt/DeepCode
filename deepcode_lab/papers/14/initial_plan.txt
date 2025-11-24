@@ -1,0 +1,374 @@
+```yaml
+complete_reproduction_plan:
+  paper_info:
+    title: "Neural Sinkhorn Gradient Flow"
+    core_contribution: >
+      Introduces NSGF, a neural network that learns the time‑varying velocity field of the
+      Wasserstein gradient flow with respect to the Sinkhorn divergence, and a two‑phase
+      NSGF++ variant that first follows the Sinkhorn flow for ≤5 steps then refines
+      samples via a learned straight‑line flow, achieving high‑quality image generation
+      with very few function evaluations.
+
+  # ==============================================================
+  # SECTION 1 – File Structure (≈ 900 characters)
+  # ==============================================================
+
+  file_structure: |
+    ├─ data/
+    │   ├─ mnist/               # torchvision MNIST download (optional)
+    │   └─ cifar10/             # torchvision CIFAR‑10 download
+    ├─ src/
+    │   ├─ __init__.py
+    │   ├─ utils.py             # generic helpers (seed, logging, viz)
+    │   ├─ sinkhorn.py          # wrapper around geomloss.SinkhornLoss, gradient extraction
+    │   ├─ particles.py         # explicit‑Euler particle integrator (eq.14)
+    │   ├─ models/
+    │   │   ├─ __init__.py
+    │   │   ├─ mlp.py           # 3‑layer MLP for 2‑D experiments
+    │   │   ├─ unet.py          # UNet definition (used for vθ & uδ)
+    │   │   ├─ time_predictor.py# 4‑layer CNN for tϕ
+    │   ├─ training/
+    │   │   ├─ __init__.py
+    │   │   ├─ nsfg_trainer.py  # Algorithm 1 – build pool & train vθ
+    │   │   ├─ nsfgpp_trainer.py# Algorithm 3 – train tϕ & uδ
+    │   ├─ inference/
+    │   │   ├─ __init__.py
+    │   │   ├─ nsfg_infer.py    # Algorithm 2 – inference with vθ
+    │   │   ├─ nsfgpp_infer.py  # Algorithm 4 – full NSGF++ pipeline
+    ├─ experiments/
+    │   ├─ synthetic_2d.py      # training/evaluation on 2‑D benchmarks
+    │   ├─ mnist.py             # training/evaluation on MNIST
+    │   ├─ cifar10.py           # training/evaluation on CIFAR‑10
+    │   └─ metrics.py           # 2‑Wasserstein, FID, IS calculators
+    ├─ configs/
+    │   ├─ nsfg_2d.yaml
+    │   ├─ nsfgpp_mnist.yaml
+    │   └─ nsfgpp_cifar.yaml
+    ├─ results/
+    │   ├─ figures/             # stored plots (particle trajectories, sample grids)
+    │   └─ tables/              # reproduced tables (CSV)
+    ├─ README.md                # usage instructions – generated last
+    └─ requirements.txt         # pinned dependencies – generated last
+
+  # ============================================================== 
+  # SECTION 2 – Implementation Components (≈ 3600 characters)
+  # ==============================================================
+
+  implementation_components: |
+    # ------------------------------------------------------------------
+    # 1. Core Mathematical Building Blocks
+    # ------------------------------------------------------------------
+    - name: Wasserstein‑2 distance (Eq.1)
+      formula: "W₂(μ,ν)= (min_{π∈Π(μ,ν)} ∫‖x−y‖² dπ(x,y))^{1/2}"
+      use: baseline metric, not computed directly.
+    - name: Entropy‑regularised OT (Wε, Eq.2)
+      formula: "W_{2,ε}(μ,ν)= (min_{π∈Π(μ,ν)} ∫‖x−y‖² dπ + ε KL(π‖μ⊗ν) )^{1/2}"
+      use: passed to geomloss.SinkhornLoss(blur=ε, scaling=σ).
+    - name: Sinkhorn divergence (Sε, Eq.5)
+      formula: "Sε(μ,ν)=Wε(μ,ν) − ½[Wε(μ,μ)+Wε(ν,ν)]"
+      use: objective Fε(·)=Sε(·,μ*) whose gradient yields the velocity field.
+    - name: First variation (Eq.9)
+      formula: "δFε/δμ = f_{μ,μ*} − f_{μ,μ}"
+      where f_{μ,ν} are the dual potentials (Wε‑potentials).
+    - name: Velocity field (derived from Eq.9)
+      formula: "v_{Fε}^{μ_t}(x)=∇f_{μ_t,μ_t}(x) − ∇f_{μ_t,μ*}(x)"
+      use: empirical version ŷv (Eq.13) computed on minibatch particles.
+    - name: Particle ODE (Eq.14)
+      formula: "dx_i/dt = v̂_{Fε}^{μ_t}(x_i)"
+      integration via explicit Euler with step η.
+
+    # ------------------------------------------------------------------
+    # 2. Neural Approximators
+    # ------------------------------------------------------------------
+    - name: Velocity‑field network vθ(x,t)
+      purpose: Approximate time‑varying velocity field of Eq.10.
+      architecture:
+        * 2‑D experiments: MLP (3 hidden layers, 256 units each, ReLU, no output activation).
+        * Image experiments: UNet (see src/models/unet.py) with sinusoidal time embedding added to the bottleneck.
+      input: position tensor x (shape B×d) and scalar time t (∈[0,T]).
+      output: velocity vector of same dimension as x.
+      loss (Eq.12): L(θ)=E_{t∼U[0,T],x∼μ_t}[‖vθ(x,t)−v̂(x,t)‖²].
+
+    - name: Phase‑transition predictor tϕ(·)
+      purpose: Predict τ∈[0,1] where the model switches from NSGF to straight flow.
+      architecture: 4‑layer CNN (filters 32‑64‑128‑256, 3×3 kernels, ReLU, 2×2 avg‑pool after each, flatten → Linear → Sigmoid).
+      loss: L(ϕ)=E_{t∼U(0,1),X_t}[ (t−tϕ(X_t))² ].
+
+    - name: Neural Straight Flow (NSF) network uδ(x,t)
+      purpose: Model the constant‑velocity straight flow used after τ.
+      architecture: Same UNet as vθ (weight‑sharing not required).
+      loss: L_NSF(δ)=E_{t,X_t}[‖uδ(X_t,t)−(y−x₀)‖²] where (x₀,y) are source/target pair.
+
+    # ------------------------------------------------------------------
+    # 3. Training & Data Pipelines
+    # ------------------------------------------------------------------
+    - Component: Trajectory pool (experience replay)
+      description: While building the pool we simulate Eq.14 for T steps (T≤5 for NSGF++), store every (x, v̂) pair.
+      storage: In‑memory list of tensors; optionally dump to disk (≈20 GB for MNIST, ≈45 GB for CIFAR‑10).
+    - Component: Minibatch sampler
+      draws random (x, v̂) entries from the pool for each gradient‑step of vθ.
+    - Data sources:
+      * Source distribution μ₀: standard Gaussian N(0,I) for synthetic data; for images, uniform noise of same shape.
+      * Target distribution μ*: training set of the benchmark (MNIST, CIFAR‑10) or synthetic point clouds.
+    - Pre‑processing:
+      * Images normalized to [−1,1] (torchvision.transforms.Normalize(mean=0.5, std=0.5)).
+      * For synthetic 2‑D: points are directly used (no scaling).
+
+    # ------------------------------------------------------------------
+    # 4. Algorithms (pseudocode ↔ equations)
+    # ------------------------------------------------------------------
+    - name: Compute Sinkhorn potentials (f,g)
+      pseudocode: |
+        def compute_potentials(X_src, X_tgt, blur, scaling):
+            # X_src, X_tgt: B×d tensors (empirical μ, ν)
+            # geomloss returns potentials and OT plan
+            sink = geomloss.SinkhornLoss(eps=blur, kernel_size=scaling, debias=True)
+            loss = sink(X_src, X_tgt)               # computes Sε
+            # potentials are accessible via sink.potential_fn()
+            f, g = sink.potential_fn()              # f on X_src, g on X_tgt
+            return f, g
+      notes: Autograd yields ∇f and ∇g automatically; gradients ∇f(X) are required for velocity field.
+    - name: Velocity‑field matching (Algorithm 1)
+      pseudocode: |
+        # Build pool
+        pool = []
+        for batch in range(num_pool_batches):
+            X = sample(μ0, n)        # shape n×d
+            Y = sample(μ*, n)
+            for t in range(T+1):
+                f_tt, _ = compute_potentials(X, X, blur, scaling)
+                f_tstar, _ = compute_potentials(X, Y, blur, scaling)
+                v_hat = grad(f_tt, X) - grad(f_tstar, X)   # Eq.13
+                pool.append((X.clone(), v_hat.clone(), t))
+                X = X + η * v_hat                         # Eq.14 integration
+        # Train vθ
+        optimizer = Adam(vθ.parameters(), lr=γ)
+        for it in range(max_iters):
+            (x_batch, v_batch, t_batch) = sample_from(pool, batch=n)
+            pred = vθ(x_batch, t_batch)
+            loss = ((pred - v_batch)**2).mean()
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+    - name: Phase‑transition predictor (part of Algorithm 3)
+      pseudocode: |
+        optimizer = Adam(tϕ.parameters(), lr=γ')
+        for it in range(max_it):
+            X0 = sample(μ0, n); Y = sample(μ*, n)
+            t = torch.rand(n, 1)                     # U(0,1)
+            X_t = t*Y + (1-t)*X0                      # straight interpolation
+            pred = tϕ(X_t)                            # scalar ∈(0,1)
+            loss = ((pred - t)**2).mean()
+            optimizer.zero_grad(); loss.backward(); optimizer.step()
+    - name: NSF training (Algorithm 3, last block)
+      pseudocode: |
+        optimizer = Adam(uδ.parameters(), lr=γ'')
+        for it in range(max_it):
+            X0 = sample(μ0, n); Y = sample(μ*, n)
+            t = torch.rand(n, 1)
+            X_t = t*Y + (1-t)*X0
+            target_vel = Y - X0                     # constant vector
+            pred = uδ(X_t, t)
+            loss = ((pred - target_vel)**2).mean()
+            optimizer.zero_grad(); loss.backward(); optimizer.step()
+    - name: NSGF++ inference (Algorithm 4)
+      pseudocode: |
+        # Phase 1 – NSGF
+        X = sample(μ0, n)
+        for t in range(T):
+            X = X + η * vθ(X, t)                     # Eq.2 inference
+        # Phase 2 – predict transition time
+        τ = tϕ(X)                                   # scalar per particle
+        # Phase 3 – NSF refinement
+        steps = ((1-τ)/ω).ceil().int()               # number of Euler steps
+        for s in range(steps):
+            X = X + ω * uδ(X, τ + s*ω)               # explicit Euler to t=1
+        return X
+
+    # ------------------------------------------------------------------
+    # 5. Hyper‑parameters (all values used in the paper)
+    # ------------------------------------------------------------------
+    training:
+      batch_size:
+        synthetic_2d: 256
+        mnist:        256
+        cifar10:      128
+      optimizer: Adam
+      lr_velocity:        1e-4
+      lr_time_predictor:  1e-4
+      lr_nsf:             1e-4
+      betas: [0.9, 0.999]
+      weight_decay: 0
+      total_iters:
+        synthetic_2d: 20000
+        mnist:        20000
+        cifar10:      20000
+        time_predictor: 40000
+        nsf:            20000
+    sinkhorn:
+      blur: [0.5, 1.0, 2.0]               # chosen per dataset (see Section E)
+      scaling: [0.80, 0.85, 0.95]         # same
+    euler:
+      η_nsfg: 0.2                         # chosen to keep ≤5 NFE in NSGF++ (empirical)
+      ω_nsf: 0.02                         # small step for straight flow (≈50‑100 NFE total)
+    nsfg++:
+      T_max: 5                            # maximum NSGF steps in phase 1
+      num_pool_batches: 1500 (MNIST) or 2500 (CIFAR‑10)
+    unet:
+      channels:
+        mnist:   32
+        cifar10: 128
+      depth:
+        mnist:   1
+        cifar10: 2
+      channels_mult: [1,2,2] (mnist) or [1,2,2,2] (cifar10)
+      attention_heads: 1 (mnist) / 4 (cifar10)
+      dropout: 0.0
+    time_predictor_cnn:
+      filters: [32, 64, 128, 256]
+      kernel: 3
+      stride: 1
+      padding: 1
+      pool: 2
+      activation: ReLU
+      final_activation: Sigmoid
+
+  # ============================================================== 
+  # SECTION 3 – Validation & Evaluation (≈ 2200 characters)
+  # ==============================================================
+
+  validation_approach: |
+    1. Synthetic 2‑D Benchmarks
+       • Datasets: 8‑gaussians, moons, checkerboard, S‑curve (same as Tong et al. 2023).
+       • Procedure:
+         – Train NSGF (Algorithm 1) with T=10 (full) and with T=5 (NSGF++).
+         – Evaluate 2‑Wasserstein distance between 10 k generated particles and 10 k test particles.
+         – Compare against baselines (JKO‑Flow, EPT, OT‑CFM, FM, RF‑1/2/3, SI) using the exact numbers from Table 1.
+       • Success criterion: reproduced distance ≤ 0.15 for 8‑gaussians (10‑step) and ≤ 0.07 for 8‑gaussians‑moons, matching the paper’s values within ±0.01.
+
+    2. MNIST Generation
+       • Train NSGF++ (Algorithm 3) with the UNet configuration (channels = 32, depth = 1).
+       • Compute Fréchet Inception Distance (FID) using a pretrained MNIST‑trained classifier (same architecture as in the paper’s appendix) on 10 k generated samples vs. 10 k test samples.
+       • Record Inception Score (IS) using the same classifier.
+       • Expected results: FID ≤ 3.8, IS ≈ 5.5, total NFE ≤ 60 (≈5 NSGF steps + ≈55 NSF steps).
+
+    3. CIFAR‑10 Generation
+       • Same pipeline as MNIST but with UNet channels = 128, depth = 2, attention heads = 4.
+       • Use the official Inception‑v3 network (pre‑trained on ImageNet) to compute FID and IS on 10 k generated images.
+       • Expected results: FID ≤ 8.86, IS ≈ 5.55, total NFE ≤ 60 (consistent with Table 2).
+
+    4. Ablation Studies
+       • (a) Remove experience replay (train vθ on‑the‑fly) – expect slower convergence and higher Wasserstein distance.
+       • (b) Omit the NSF phase – evaluate final FID/IS; should degrade by ~10‑15 % relative to full NSGF++.
+       • (c) Vary T ∈ {1,3,5} for the NSGF phase – plot FID vs. T to reproduce the “quick manifold approach” claim.
+       • Report all ablations in CSV format and plot trends (Matplotlib).
+
+    5. Reproducibility Checks
+       • Fix random seeds (torch, numpy, random) before each experiment.
+       • Log all hyper‑parameters to a YAML file per run.
+       • Store checkpoints of each network (vθ, tϕ, uδ) and verify that loading them yields identical generation results.
+       • Provide scripts to regenerate every figure (particle trajectories, sample grids) and table exactly as in the paper.
+
+  # ============================================================== 
+  # SECTION 4 – Environment & Dependencies (≈ 950 characters)
+  # ==============================================================
+
+  environment_setup: |
+    • OS: Linux (Ubuntu 20.04) – any recent Linux distro works.
+    • Python: 3.9 (>=3.8, <3.11).
+    • Core libraries (pinned in requirements.txt):
+        - torch==1.13.1+cu117
+        - torchvision==0.14.1+cu117
+        - geomloss==0.2.4
+        - numpy==1.23.5
+        - scipy==1.10.1
+        - tqdm==4.65.0
+        - matplotlib==3.6.3
+        - pandas==1.5.3
+        - pillow==9.4.0
+        - tensorboard==2.12.0
+        - scikit‑image==0.20.0
+        - torch‑metrics==0.11.4 (for IS/FID)
+    • GPU: NVIDIA RTX‑3090 (24 GB) or any CUDA‑capable GPU with ≥8 GB VRAM.
+      – For CPU‑only runs, set DEVICE=cpu; expect ~5× slower training.
+    • CUDA/cuDNN: match the torch binary (CUDA 11.7 for the version above).
+    • Optional: conda environment creation:
+        conda create -n nsfg python=3.9
+        conda activate nsfg
+        pip install -r requirements.txt
+    • Additional tools:
+        - git (>=2.30) for version control.
+        - wget/curl for dataset download (handled automatically by torchvision).
+
+  # ============================================================== 
+  # SECTION 5 – Implementation Strategy (≈ 1700 characters)
+  # ==============================================================
+
+  implementation_strategy: |
+    Phase 0 – Project bootstrap
+      1. Clone an empty repo and create the directory layout described in Section 1.
+      2. Write a minimal README and requirements.txt, then run `pip install -r requirements.txt`.
+      3. Add a `utils.py` with seed‑initialisation (`set_seed`) and a simple logger (TensorBoard).
+
+    Phase 1 – Core math utilities
+      • Implement `sinkhorn.py`:
+          – Wrapper class `SinkhornPotentials` that receives two point clouds, blur, scaling.
+          – Uses `geomloss.SinkhornLoss` with `debias=True` to obtain potentials.
+          – Provides methods `potential_X()`, `potential_Y()`, and `grad_X()` (autograd).
+      • Implement `particles.py`:
+          – Function `euler_step(x, v, η)` and `integrate_trajectory(x0, v_func, η, T)`.
+
+    Phase 2 – Velocity‑field network
+      • Implement `mlp.py` (for 2‑D) and `unet.py` (image case) following the architecture spec.
+      • Add sinusoidal time embedding (function `time_emb(t, dim=16)`) used in both models.
+      • Verify that forward pass returns a tensor of shape B×d.
+
+    Phase 3 – NSGF training (Algorithm 1)
+      • Write `nsfg_trainer.py`:
+          – Loop to build the trajectory pool: for each batch, compute f_tt and f_tstar, assemble v̂, integrate.
+          – Store tuples (x, v̂, t) in a Python list; optionally serialize to `.pt` files.
+          – Training loop over the pool: sample minibatch, compute loss, back‑prop, update θ.
+          – Save checkpoints and log loss curves.
+      • Run on synthetic 2‑D data first (fast) to ensure loss decreases and generated particles converge.
+
+    Phase 4 – Two‑phase extensions
+      • Implement `time_predictor.py` (CNN) and its training loop in `nsfgpp_trainer.py`.
+      • Implement `nsf_model.py` (UNet) and its regression training on straight‑line interpolations.
+      • Integrate all three components into a single trainer:
+          – Phase 1: train vθ (as before) with T≤5.
+          – Phase 2: train tϕ.
+          – Phase 3: train uδ.
+      • Use the hyper‑parameters from Section 2; adjust learning‑rates if validation loss plateaus.
+
+    Phase 5 – Inference pipelines
+      • `nsfg_infer.py` implements Algorithm 2 (pure NSGF).
+      • `nsfgpp_infer.py` implements Algorithm 4:
+          – Run NSGF steps, predict τ per sample, compute number of NSF steps, execute refinement.
+          – Provide a command‑line interface to output generated images to `results/figures/`.
+      • Verify that the number of NFEs matches the theoretical budget (≤5 for NSGF, rest for NSF).
+
+    Phase 6 – Evaluation suite
+      • `metrics.py`:
+          – 2‑Wasserstein distance: use SciPy’s `ot.emd2` on sampled particles.
+          – FID/IS: wrap `torchmetrics.FID` and `torchmetrics.InceptionScore` with pretrained Inception‑v3.
+      • Scripts in `experiments/` call the trainers, then compute metrics, write CSV tables, and call Matplotlib to recreate every figure in the paper.
+
+    Phase 7 – Documentation & Reproducibility
+      • After all code runs, fill the README with step‑by‑step commands (example):
+          python experiments/synthetic_2d.py --config configs/nsfg_2d.yaml
+          python experiments/mnist.py --config configs/nsfgpp_mnist.yaml
+          python experiments/cifar10.py --config configs/nsfgpp_cifar.yaml
+      • Commit all config files, seed values, and a `dockerfile` for containerised execution.
+
+    Phase 8 – Ablations & Final Checks
+      • Disable experience replay and re‑run NSGF training – record loss curves.
+      • Skip NSF phase during inference – compare FID/IS.
+      • Vary T and plot the trade‑off between NFEs and sample quality.
+      • Ensure all reproduced tables match the numbers reported (±0.02 tolerance).
+
+    Throughout all phases:
+      – Use deterministic CUDA operations (`torch.backends.cudnn.deterministic = True`).
+      – Log GPU memory usage to detect potential OOM in trajectory‑pool storage.
+      – Keep a continuous integration test that imports each module and runs a single forward pass (ensures future maintainability).
+
+```

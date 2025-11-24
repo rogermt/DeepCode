@@ -1,0 +1,29 @@
+seed: 42
+
+model:
+  dim: 2
+  hidden_dim: 256
+
+training:
+  batch_size: 256
+  lr_velocity: 1e-4
+  total_iters: 20000
+  eta: 0.2
+  T: 10
+  num_pool_batches: 1500
+  blur: 0.5
+  scaling: 0.80
+
+sinkhorn:
+  blur: 0.5
+  scaling: 0.80
+
+euler:
+  eta_nsfg: 0.2
+
+nsfg:
+  T_max: 10
+
+logging:
+  log_dir: logs/nsfg
+  checkpoint_dir: checkpoints/nsfg

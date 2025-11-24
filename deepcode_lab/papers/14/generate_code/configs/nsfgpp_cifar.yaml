@@ -1,0 +1,55 @@
+# NSGF++ configuration for CIFAR-10
+# This file defines hyper‑parameters for training the two‑phase NSGF++ pipeline on the CIFAR‑10 dataset.
+
+seed: 42
+
+model:
+  # UNet architecture for velocity field vθ and straight‑flow uδ
+  in_channels: 3
+  out_channels: 3
+  base_channels: 128
+  depth: 2
+  time_emb_dim: 16
+  # attention heads not used directly in this implementation but kept for reference
+  attention_heads: 4
+
+training:
+  # Batch sizes for each component
+  batch_size_velocity: 128
+  batch_size_time: 128
+  batch_size_nsf: 128
+
+  # Learning rates
+  lr_velocity: 1e-4
+  lr_time_predictor: 1e-4
+  lr_nsf: 1e-4
+
+  # Optimizer settings (Adam)
+  betas: [0.9, 0.999]
+  weight_decay: 0.0
+
+  # Iteration counts
+  total_iters_velocity: 20000
+  total_iters_time: 40000
+  total_iters_nsf: 20000
+
+  # Sinkhorn parameters (chosen for CIFAR‑10)
+  blur: 1.0
+  scaling: 0.85
+
+  # Euler integration step for NSGF phase
+  eta_nsfg: 0.2
+
+  # Number of Euler steps in NSGF phase (≤5 for NSGF++)
+  T_max: 5
+
+  # Number of pool batches (memory‑intensive, see paper)
+  num_pool_batches: 2500
+
+  # NSF phase step size
+  omega_nsf: 0.02
+
+  # Paths for logging and checkpoints
+  logging:
+    log_dir: logs/nsfgpp_cifar
+    checkpoint_dir: checkpoints/nsfgpp_cifar

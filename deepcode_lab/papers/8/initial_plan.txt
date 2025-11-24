@@ -1,0 +1,227 @@
+```yaml
+complete_reproduction_plan:
+  paper_info:
+    title: "Neural Sinkhorn Gradient Flow"
+    core_contribution: >
+      A time‑varying velocity‑field model (vθ) that matches the gradient
+      of the Sinkhorn divergence, plus a two‑phase NSGF++ scheme that
+      switches to a learned straight‑line flow (NSF) using a neural
+      transition‑time predictor (tφ). The method yields high‑quality
+      image generation with far fewer ODE steps than competing OT‑based
+      flows.
+
+  # SECTION 1 – File Structure (≈ 880 chars)
+  file_structure: |
+    nsfg/
+    ├─ configs/
+    │   ├─ nsgf_2d.yaml          # hyper‑params for synthetic experiments
+    │   ├─ nsgf_image.yaml       # hyper‑params for MNIST / CIFAR‑10
+    │   └─ nsgfpp.yaml           # hyper‑params for NSGF++
+    ├─ data/
+    │   ├─ synthetic/            # script generators for 8‑gaussians, moons, etc.
+    │   └─ images/
+    │       ├─ mnist/
+    │       └─ cifar10/
+    ├─ src/
+    │   ├─ models/
+    │   │   ├─ velocity_unet.py       # vθ (UNet backbone, time‑embedding)
+    │   │   ├─ straight_unet.py       # uδ (NSF, same UNet design)
+    │   │   └─ time_predictor_cnn.py  # tφ (4‑layer CNN)
+    │   ├─ utils/
+    │   │   ├─ sinkhorn_engine.py     # thin wrapper around GeomLoss
+    │   │   ├─ replay_buffer.py       # circular experience‑replay
+    │   │   ├─ ode_solver.py          # explicit Euler / RK1 helper
+    │   │   └─ time_embedding.py      # sinusoidal embedding of scalar t
+    │   ├─ training/
+    │   │   ├─ train_nsgf.py          # Algorithm 1: trajectory pool + vθ training
+    │   │   ├─ train_nsgfpp.py        # Algorithm 3: full NSGF++ (vθ, tφ, uδ)
+    │   │   └─ trainer_utils.py       # checkpoint, logging, LR schedulers
+    │   ├─ inference/
+    │   │   ├─ infer_nsgf.py          # Algorithm 2: pure NSGF sampling
+    │   │   └─ infer_nsgfpp.py        # Algorithm 4: NSGF++ sampling pipeline
+    │   └─ evaluation/
+    │       ├─ metrics.py             # 2‑W distance, FID, IS, NFE counter
+    │       └─ visualizer.py          # 2‑D trajectory plots, sample grids
+    ├─ scripts/
+    │   ├─ run_2d.sh                  # end‑to‑end synthetic benchmark
+    │   ├─ run_mnist.sh               # NSGF++ on MNIST
+    │   ├─ run_cifar.sh               # NSGF++ on CIFAR‑10
+    │   └─ eval_metrics.sh            # compute all reported numbers
+    ├─ notebooks/
+    │   └─ analysis.ipynb             # quick sanity checks & reproducing figures
+    ├─ requirements.txt               # torch≥2.0, geomloss, torchvision, tqdm, matplotlib, torch‑metrics
+    └─ README.md                      # usage guide – written after code is complete
+
+  # SECTION 2 – Implementation Components (≈ 3550 chars)
+  implementation_components: |
+    1. Sinkhorn Potential Engine (src/utils/sinkhorn_engine.py)
+       • Function compute_potentials(x_src, x_tgt, blur, scaling) → (f_X, f_Y)
+       • Uses geomloss.SamplesLoss("sinkhorn") with epsilon = blur²/2.
+       • Returns potentials and enables torch.autograd.grad to obtain ∇f_X, ∇f_Y.
+       • Numerical‐stability tricks: clamp inputs to [−10,10], enable requires_grad on x.
+
+    2. Velocity‑Field Network vθ (src/models/velocity_unet.py)
+       • UNet backbone (base_channels=128, depth=2 for images; MLP for 2‑D).
+       • Input: concatenation of data point x and sinusoidal embedding of scalar t.
+       • Output: d‑dimensional vector matching empirical velocity.
+       • Activation: SiLU; final layer linear; weight init Xavier uniform.
+       • Optimiser: Adam(lr=1e‑4, β1=0.9, β2=0.999); optional grad‑norm clipping at 1.0.
+
+    3. Neural Straight Flow uδ (src/models/straight_unet.py)
+       • Same UNet architecture as vθ (separate weight set).
+       • Trained to regress the straight‑line velocity Y‑X₀ (Eq. L_NSF).
+       • Loss: mean‑squared error between network output and ground‑truth displacement.
+
+    4. Phase‑Transition Time Predictor tφ (src/models/time_predictor_cnn.py)
+       • 4‑layer CNN: Conv(32) → ReLU → AvgPool → Conv(64) → ReLU → AvgPool → Conv(128) → ReLU → AvgPool → Conv(256) → ReLU → AvgPool.
+       • Flatten → Fully‑connected → 1‑dim output with Sigmoid (maps to [0,1]).
+       • Optimiser: Adam(lr=1e‑4). Trained on pairs (X_t, t) where X_t = t·Y + (1‑t)·X₀.
+
+    5. Trajectory Pool (src/utils/replay_buffer.py)
+       • Circular FIFO buffer with capacity C (1500 batches for MNIST, 2500 for CIFAR‑10).
+       • Stores tuples (x, v̂, t) in fp16 to limit memory.
+       • Provides add(x, v̂, t) and sample(batch_size) returning torch tensors.
+       • Supports checkpoint saving (torch.save) and lazy loading.
+
+    6. Training Scripts
+       • train_nsgf.py implements Algorithm 1:
+         – Outer loop builds the replay buffer by repeatedly:
+           • Sampling X₀ ~ µ₀, Y ~ µ*.
+           • For each discrete time step t ∈ {0,…,T}:
+               ◦ Compute f_X, f_Y via sinkhorn_engine.
+               ◦ Obtain empirical velocity v̂ = ∇f_X − ∇f_Y.
+               ◦ Store (X, v̂, t) in pool.
+               ◦ Euler update X ← X + η·v̂.
+         – Inner loop samples minibatches from the pool and minimizes
+           L(θ)=‖vθ(x,t)−v̂‖² using Adam.
+       • train_nsgfpp.py implements Algorithm 3:
+         – Re‑uses the pool built in the NSGF phase (θ frozen).
+         – Simultaneously trains:
+           ◦ tφ via MSE loss on (X_t, t).
+           ◦ uδ via MSE loss on straight‑line velocity.
+         – Optionally alternates updates to reduce GPU memory pressure.
+       • trainer_utils.py abstracts checkpointing, learning‑rate schedules,
+         TensorBoard logging, and deterministic seeding.
+
+    7. Inference Scripts
+       • infer_nsgf.py (Algorithm 2): loads vθ, starts from prior µ₀,
+         iterates X ← X + η·vθ(X, t) for T steps, returns samples.
+       • infer_nsgfpp.py (Algorithm 4):
+         – Runs the short NSGF phase (≤5 Euler steps).
+         – Computes τ = tφ(X_T) (clamped to [0,1]).
+         – Determines K = ⌈(1−τ)/η⌉ sub‑steps for NSF.
+         – Integrates X ← X + η·uδ(X, τ+ k·η) for k=0…K−1.
+         – Returns final samples.
+
+    8. Evaluation Suite (src/evaluation/metrics.py)
+       • 2‑W distance: uses the same Sinkhorn engine on 10 k test points.
+       • FID & IS: wraps torch‑fid or pytorch‑fid with Inception‑v3 pretrained checkpoint.
+       • NFE: a global counter incremented each time vθ, tφ, or uδ forward is called.
+       • Provides CSV logging utilities for tables 1‑3.
+
+    9. Utilities
+       • time_embedding.py implements sinusoidal positional encoding of scalar t with 128‑dim frequencies.
+       • ode_solver.py supplies explicit Euler (step η) and optional RK2 for higher accuracy in NSF.
+       • visualizer.py generates:
+         – 2‑D trajectory plots colour‑coded by step.
+         – Sample grids for MNIST and CIFAR‑10.
+         – CSV → matplotlib figures replicating Figures 1‑7.
+
+  # SECTION 3 – Validation & Evaluation (≈ 2250 chars)
+  validation_approach: |
+    **Synthetic 2‑D Benchmarks**
+      • Datasets: 8‑gaussians, moons, S‑curve, checkerboard (generated via sklearn).
+      • Protocol: Train NSGF for 10 Euler steps (η=0.1) and for 100 steps (η=0.05).
+      • Metrics: Empirical 2‑W distance computed on 10 k held‑out points.
+      • Success criteria:  
+        – 8‑gaussians (10 steps) ≤ 0.30, (100 steps) ≤ 0.14 (Table 1).  
+        – Trajectory visualisations matching Fig 1–4 (colour progression, monotonic descent).
+
+    **Image Generation (MNIST & CIFAR‑10)**
+      • Training: NSGF++ with T=5 NSGF steps, η=0.1, batch sizes 256 (MNIST) / 128 (CIFAR‑10).
+      • Evaluation:  
+        – FID (lower is better) computed on 10 k generated samples.  
+        – IS (higher is better).  
+        – NFE = total velocity‑field evaluations during inference.
+      • Target numbers (from the paper):  
+        – MNIST: FID ≤ 3.8, NFE ≤ 60.  
+        – CIFAR‑10: FID ≤ 8.86, IS ≥ 5.55, NFE ≤ 60.
+      • Reproduce Tables 2–3 by running `scripts/run_mnist.sh` and `run_cifar.sh`.
+      • Plotting: `notebooks/analysis.ipynb` should generate sample grids identical to Figures 9‑11.
+
+    **Ablation Checks**
+      • Disable the replay buffer → expect slower convergence and higher 2‑W.
+      • Train NSGF without the NSF phase → NFE should rise dramatically while FID remains similar.
+      • Replace explicit Euler with RK2 for NSF → verify negligible change in final metrics (confirms that simple Euler suffices).
+
+    **Reproducibility**
+      • Fixed random seeds (torch, numpy, random) saved in `trainer_utils.py`.  
+      • Deterministic CuDNN (`torch.backends.cudnn.deterministic = True`).  
+      • All hyper‑parameters logged to `configs/*.yaml` and checkpointed together with model weights and pool state.
+
+  # SECTION 4 – Environment & Dependencies (≈ 900 chars)
+  environment_setup: |
+    • OS: Linux (Ubuntu 20.04+) or macOS (≥ 12) with CUDA‑capable GPU.
+    • Python: 3.10 (conda env recommended: `conda create -n nsfg python=3.10`).
+    • Core libraries (exact versions tested):
+        - torch==2.1.0+cu121
+        - torchvision==0.16.0
+        - geomloss==0.2.5 (PyKeOps backend)
+        - torchmetrics==0.11.4
+        - tqdm==4.66.1
+        - matplotlib==3.8.2
+        - scikit-learn==1.4.0
+        - h5py==3.11.0 (optional for on‑disk replay buffer)
+        - pillow==10.2.0
+    • Optional:
+        - torch‑fid (for FID computation) or tensorflow‑gan (alternative).
+        - torchdiffeq (for higher‑order ODE solvers if desired).
+    • Hardware: single RTX 3090 (24 GB) sufficient; minimum 16 GB GPU for CIFAR‑10 experiments.
+    • Installation script (`scripts/setup_env.sh`) performs `conda env create -f environment.yml` and verifies GPU availability.
+
+  # SECTION 5 – Implementation Strategy (≈ 1700 chars)
+  implementation_strategy: |
+    **Phase 0 – Project Bootstrap**
+      1. Clone repository skeleton, create conda env, install dependencies via `setup_env.sh`.
+      2. Verify CUDA visibility (`torch.cuda.is_available()`).
+      3. Run unit tests for sinkhorn_engine (random 2‑D clouds) and replay_buffer (add/sample cycle).
+
+    **Phase 1 – Core Utilities**
+      • Implement `sinkhorn_engine.py` wrapping GeomLoss; expose `potentials(x, y)` and gradient helper.
+      • Build `time_embedding.py` (sinusoidal embeddings up to 16 frequencies).
+      • Write `ode_solver.py` with a simple Euler step that increments a global NFE counter.
+
+    **Phase 2 – Model Bases**
+      • Port the UNet from Dhariwal‑&‑Nichol (PyTorch) into `velocity_unet.py` and copy to `straight_unet.py`. Add a method `forward(x, t)` that concatenates the time embedding.
+      • Create `time_predictor_cnn.py` exactly as described (4 conv layers + FC). Ensure output passes through sigmoid.
+      • Add `replay_buffer.py` with FIFO logic, fp16 storage, and `save/load` methods.
+
+    **Phase 3 – Training Pipelines**
+      • **train_nsgf.py**:
+         - Build the trajectory pool: outer loop over epochs, inner Sinkhorn‑velocity computation, Euler updates, buffer insert.
+         - Inner training loop: sample minibatch from pool, compute loss L(θ), optimiser step, checkpoint θ every epoch.
+      • **train_nsgfpp.py**:
+         - Load pretrained θ and frozen pool.
+         - Simultaneously train tφ and uδ:
+            * For each iteration, sample fresh (X₀, Y), draw t~U(0,1), compute X_t = t·Y+(1‑t)·X₀.
+            * Compute predictor loss (MSE(t, tφ(X_t))) and NSF loss (MSE(Y‑X₀, uδ(X_t, t))).
+            * Update φ and δ with separate Adam instances; optionally alternate updates every 10 steps to keep GPU memory stable.
+      • All scripts log loss curves, learning rates, and NFE to TensorBoard.
+
+    **Phase 4 – Inference & Evaluation**
+      • `infer_nsgf.py`: load vθ checkpoint, run explicit Euler for T steps, store samples as .npy.
+      • `infer_nsgfpp.py`: after NSGF phase, compute τ = tφ(X_T), perform K=ceil((1‑τ)/η) NSF Euler steps, output final samples.
+      • `metrics.py`: functions `compute_2W`, `compute_fid`, `compute_is`, each returning a scalar and updating NFE.
+      • Scripts `eval_metrics.sh` call these functions on generated samples and write CSV files matching the paper’s tables.
+
+    **Phase 5 – Re‑production & Reporting**
+      • Create `run_all.sh` orchestrating: data download → training NSGF → training NSGF++ → inference → evaluation → notebooks for figure generation.
+      • Write README with step‑by‑step commands, expected runtimes (≈ 1 h for 2‑D, ≤ 2 h for CIFAR‑10 on RTX 3090), and hardware specs.
+      • Archive all hyper‑parameter yaml files and final checkpoint files for full reproducibility.
+
+    **Phase 6 – Validation**
+      • Execute the synthetic pipeline, verify 2‑W distances meet the thresholds.
+      • Run MNIST and CIFAR‑10 pipelines, compare FID/IS/NFE to the target numbers.
+      • Render visualisations and confirm visual similarity to the paper’s Figures 1‑7.
+
+    This staged approach isolates high‑risk components (Sinkhorn gradients, replay‑buffer memory) early, ensures each module is unit‑tested, and culminates in a fully reproducible codebase that mirrors every experiment reported in “Neural Sinkhorn Gradient Flow”.

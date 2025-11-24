@@ -32,6 +32,16 @@ import os
 import re
 import yaml
 from typing import Any, Callable, Dict, List, Optional, Tuple
+import weave
+
+""" from traceloop.sdk import Traceloop  
+# Initialize Traceloop to send traces to Jaeger instance 
+JEAGER_OTLP_ENDPOINT = os.getenv("JEAGER_OTLP_ENDPOINT", "http://localhost:4317")
+Traceloop.init(  
+    app_name="deepcode",  
+    api_endpoint=JEAGER_OTLP_ENDPOINT,  # Your Jaeger OTLP endpoint  
+    disable_batch=False,  
+) """
 
 # MCP Agent imports
 from mcp_agent.agents.agent import Agent
@@ -290,6 +300,7 @@ def get_search_server_names(
     Returns:
         List[str]: List of server names including the default search server
     """
+    return []
     default_search = get_default_search_server()
     server_names = [default_search]
 
@@ -636,14 +647,19 @@ async def run_code_analyzer(
     paper_dir: str, logger, use_segmentation: bool = True
 ) -> str:
     """
+<<<<<<< HEAD
     Run the adaptive code analysis workflow with optimized file reading.
 
+=======
+    Run the adaptive code analysis workflow with optimized file reading - SEQUENTIAL execution.
+    
+>>>>>>> c4bb4b0 (chore: checkpoint local edits before fork/upstream sync)
     This function minimizes LLM tool calls by:
     1. Reading paper file directly (deterministic, no LLM needed)
     2. Passing paper content directly to agents
     3. LLM only used for analysis and search decisions
 
-    Orchestrates three specialized agents:
+    Orchestrates three specialized agents SEQUENTIALLY:
     - ConceptAnalysisAgent: Analyzes system architecture and conceptual framework
     - AlgorithmAnalysisAgent: Extracts algorithms, formulas, and technical details
     - CodePlannerAgent: Integrates outputs into a comprehensive implementation plan
@@ -657,16 +673,23 @@ async def run_code_analyzer(
         str: Comprehensive analysis result from the coordinated agents
     """
     print(
-        f"📊 Code analysis mode: {'Segmented' if use_segmentation else 'Traditional'}"
+        f"📊 Code analysis mode: {'Segmented' if use_segmentation else 'Traditional'} (SEQUENTIAL)"
     )
+<<<<<<< HEAD
     print("   🔧 Optimized workflow: Direct file reading, LLM only for analysis")
 
     # STEP 1: Read paper file directly - no LLM needed for deterministic file operations
+=======
+    print(f"   🔧 Optimized workflow: Direct file reading, LLM only for analysis")
+    
+    # ============================================================
+    # STEP 1: Read paper file directly - no LLM needed
+    # ============================================================
+>>>>>>> c4bb4b0 (chore: checkpoint local edits before fork/upstream sync)
     paper_content = None
     paper_file_path = None
 
     try:
-        # Find .md file in paper directory - simple file system operation
         for filename in os.listdir(paper_dir):
             if filename.endswith(".md"):
                 paper_file_path = os.path.join(paper_dir, filename)
@@ -683,8 +706,15 @@ async def run_code_analyzer(
             )
     except Exception as e:
         logger.warning(f"⚠️ Error reading paper file: {e}, agents will search for it")
+<<<<<<< HEAD
 
     # STEP 2: Configure agents with minimal tool access
+=======
+    
+    # ============================================================
+    # STEP 2: Configure adaptive agent server names
+    # ============================================================
+>>>>>>> c4bb4b0 (chore: checkpoint local edits before fork/upstream sync)
     search_server_names = get_search_server_names()
     agent_config = get_adaptive_agent_config(use_segmentation, search_server_names)
     prompts = get_adaptive_prompts(use_segmentation)
@@ -693,15 +723,14 @@ async def run_code_analyzer(
         agent_config = {
             "concept_analysis": [],
             "algorithm_analysis": ["brave"],
+<<<<<<< HEAD
             "code_planner": [
                 "brave"
             ],  # Empty list instead of None - code planner doesn't need tools when paper content is provided
+=======
+            "code_planner": ["brave"],
+>>>>>>> c4bb4b0 (chore: checkpoint local edits before fork/upstream sync)
         }
-        # agent_config = {
-        #     "concept_analysis": [],
-        #     "algorithm_analysis": [],
-        #     "code_planner": [],  # Empty list instead of None - code planner doesn't need tools when paper content is provided
-        # }
     else:
         agent_config = {
             "concept_analysis": ["filesystem"],
@@ -711,6 +740,7 @@ async def run_code_analyzer(
 
     print(f"   Agent configurations: {agent_config}")
 
+<<<<<<< HEAD
     concept_analysis_agent = Agent(
         name="ConceptAnalysisAgent",
         instruction=prompts["concept_analysis"],
@@ -736,10 +766,18 @@ async def run_code_analyzer(
     base_max_tokens, _ = get_token_limits()
 
     # STEP 3: Configure parameters - minimal tool filter since paper content is provided
+=======
+    # ============================================================
+    # STEP 3: Configure request parameters
+    # ============================================================
+    base_max_tokens, _ = get_token_limits()
+    
+>>>>>>> c4bb4b0 (chore: checkpoint local edits before fork/upstream sync)
     if use_segmentation:
         max_tokens_limit = base_max_tokens
         temperature = 0.2
         max_iterations = 5
+<<<<<<< HEAD
         print(
             f"🧠 Using SEGMENTED mode: max_tokens={base_max_tokens} for complete YAML output"
         )
@@ -750,20 +788,32 @@ async def run_code_analyzer(
             if not paper_content
             else set(),  # Empty if paper already loaded
             # "brave" not in filter = all brave tools available for searching
+=======
+        print(f"🧠 Using SEGMENTED mode: max_tokens={base_max_tokens}")
+        
+        tool_filter = {
+            "document-segmentation": {
+                "read_document_segments",
+                "get_document_overview"
+            } if not paper_content else set(),
+>>>>>>> c4bb4b0 (chore: checkpoint local edits before fork/upstream sync)
         }
     else:
         max_tokens_limit = base_max_tokens
         temperature = 0.3
         max_iterations = 2
+<<<<<<< HEAD
         print(
             f"🧠 Using TRADITIONAL mode: max_tokens={base_max_tokens} for complete YAML output"
         )
 
         # Traditional mode: No filesystem tools needed (paper content already provided)
+=======
+        print(f"🧠 Using TRADITIONAL mode: max_tokens={base_max_tokens}")
+        
+>>>>>>> c4bb4b0 (chore: checkpoint local edits before fork/upstream sync)
         if paper_content:
-            tool_filter = {
-                # Only brave search available - no filesystem tools needed
-            }
+            tool_filter = {}
         else:
             tool_filter = {
                 "filesystem": {
@@ -776,91 +826,219 @@ async def run_code_analyzer(
         maxTokens=max_tokens_limit,
         temperature=temperature,
         max_iterations=max_iterations,
+<<<<<<< HEAD
         tool_filter=tool_filter
         if tool_filter
         else None,  # None = all tools, empty dict = no filtering
+=======
+        tool_filter=tool_filter if tool_filter else None,
+>>>>>>> c4bb4b0 (chore: checkpoint local edits before fork/upstream sync)
     )
 
-    # STEP 4: Construct message with paper content directly included
+    # ============================================================
+    # STEP 4: Prepare base message
+    # ============================================================
     if paper_content:
-        # Paper content provided directly - LLM only needs to analyze, not read files
-        message = f"""Analyze the research paper provided below. The paper file has been pre-loaded for you.
+        base_message = f"""Analyze the research paper provided below. The paper file has been pre-loaded for you.
 
 === PAPER CONTENT START ===
 {paper_content}
 === PAPER CONTENT END ===
 
-Based on this paper, generate a comprehensive code reproduction plan that includes:
-
-1. Complete system architecture and component breakdown
-2. All algorithms, formulas, and implementation details
-3. Detailed file structure and implementation roadmap
-
-You may use web search (brave_web_search) if you need clarification on algorithms, methods, or concepts.
-
-The goal is to create a reproduction plan detailed enough for independent implementation."""
+You may use web search (brave_web_search) if you need clarification on algorithms, methods, or concepts."""
     else:
-        # Fallback: paper not found, agents will need to find it
-        message = f"""Analyze the research paper in directory: {paper_dir}
+        base_message = f"""Analyze the research paper in directory: {paper_dir}
 
-Please locate and analyze the markdown (.md) file containing the research paper. Based on your analysis, generate a comprehensive code reproduction plan that includes:
+Please locate and analyze the markdown (.md) file containing the research paper."""
 
-1. Complete system architecture and component breakdown
-2. All algorithms, formulas, and implementation details
-3. Detailed file structure and implementation roadmap
-
-The goal is to create a reproduction plan detailed enough for independent implementation."""
-
+    # ============================================================
+    # STEP 5: Retry loop with sequential agent execution
+    # ============================================================
     max_retries = 3
     retry_count = 0
+    result = ""
 
     while retry_count < max_retries:
         try:
-            print(
-                f"🚀 Attempting code analysis (attempt {retry_count + 1}/{max_retries})"
-            )
-            result = await code_aggregator_agent.generate_str(
-                message=message, request_params=enhanced_params
-            )
+            print(f"\n{'='*70}")
+            print(f"🚀 Code Analysis Attempt {retry_count + 1}/{max_retries} (Sequential Mode)")
+            print(f"{'='*70}\n")
 
-            print(f"🔍 Code analysis result:\n{result}")
+            # --------------------------------------------------------
+            # SEQUENTIAL STEP 1: Concept Analysis
+            # --------------------------------------------------------
+            print("🔍 Phase 1/3: Running Concept Analysis Agent...")
+            concept_result = ""
+            
+            concept_analysis_agent = Agent(
+                name="ConceptAnalysisAgent",
+                instruction=prompts["concept_analysis"],
+                server_names=agent_config["concept_analysis"],
+            )
+            
+            concept_message = f"""{base_message}
 
+<<<<<<< HEAD
             completeness_score = _assess_output_completeness(
                 result
             )  # need to add file structure val
+=======
+Based on this paper, analyze the system architecture and conceptual framework."""
+
+            async with concept_analysis_agent:
+                print("  → Analyzing system architecture and design patterns...")
+                concept_analyzer = await concept_analysis_agent.attach_llm(
+                    get_preferred_llm_class()
+                )
+                concept_result = await concept_analyzer.generate_str(
+                    message=concept_message, 
+                    request_params=enhanced_params
+                )
+                print(f"  ✓ Concept analysis complete ({len(concept_result)} chars)")
+
+            # Rate limit protection
+            await asyncio.sleep(2)
+
+            # --------------------------------------------------------
+            # SEQUENTIAL STEP 2: Algorithm Analysis
+            # --------------------------------------------------------
+            print("\n🧮 Phase 2/3: Running Algorithm Analysis Agent...")
+            algorithm_result = ""
+            
+            algorithm_analysis_agent = Agent(
+                name="AlgorithmAnalysisAgent",
+                instruction=prompts["algorithm_analysis"],
+                server_names=agent_config["algorithm_analysis"],
+            )
+            
+            algorithm_message = f"""{base_message}
+
+Based on this paper, extract all algorithms, formulas, and technical implementation details."""
+
+            async with algorithm_analysis_agent:
+                print("  → Extracting algorithms, formulas, and data structures...")
+                algorithm_analyzer = await algorithm_analysis_agent.attach_llm(
+                    get_preferred_llm_class()
+                )
+                algorithm_result = await algorithm_analyzer.generate_str(
+                    message=algorithm_message, 
+                    request_params=enhanced_params
+                )
+                print(f"  ✓ Algorithm analysis complete ({len(algorithm_result)} chars)")
+
+            # Rate limit protection
+            await asyncio.sleep(2)
+
+            # --------------------------------------------------------
+            # SEQUENTIAL STEP 3: Code Planning (with context)
+            # --------------------------------------------------------
+            print("\n📋 Phase 3/3: Running Code Planner Agent...")
+            
+            code_planner_agent = Agent(
+                name="CodePlannerAgent",
+                instruction=prompts["code_planning"],
+                server_names=agent_config["code_planner"],
+            )
+            
+            # Construct enriched message with previous analysis results
+            planner_message = f"""{base_message}
+
+## Previous Analysis Results
+
+### Concept Analysis Output:
+{concept_result}
+
+### Algorithm Analysis Output:
+{algorithm_result}
+
+---
+
+Based on the above concept and algorithm analyses, generate a comprehensive code reproduction plan that includes:
+
+1. Complete system architecture and component breakdown
+2. All algorithms, formulas, and implementation details
+3. Detailed file structure and implementation roadmap
+
+The goal is to create a reproduction plan detailed enough for independent implementation."""
+
+            async with code_planner_agent:
+                print("  → Synthesizing comprehensive code implementation plan...")
+                code_planner = await code_planner_agent.attach_llm(
+                    get_preferred_llm_class()
+                )
+                result = await code_planner.generate_str(
+                    message=planner_message, 
+                    request_params=enhanced_params
+                )
+                print(f"  ✓ Code planning complete ({len(result)} chars)")
+
+            # --------------------------------------------------------
+            # Check completeness
+            # --------------------------------------------------------
+            print(f"\n🔍 Code analysis result preview:\n{result[:500]}...")
+            
+            completeness_score = _assess_output_completeness(result)
+>>>>>>> c4bb4b0 (chore: checkpoint local edits before fork/upstream sync)
             print(f"📊 Output completeness score: {completeness_score:.2f}/1.0")
 
             if completeness_score >= 0.8:
-                print(
-                    f"✅ Code analysis completed successfully (length: {len(result)} chars)"
-                )
+                print(f"✅ Code analysis completed successfully (length: {len(result)} chars)")
                 return result
             else:
-                print(
-                    f"⚠️ Output appears truncated (score: {completeness_score:.2f}), retrying with enhanced parameters..."
-                )
+                print(f"⚠️ Output appears truncated (score: {completeness_score:.2f})")
+                retry_count += 1
+                
+                if retry_count < max_retries:
+                    print(f"   Retrying with enhanced parameters...")
+                    new_max_tokens, new_temperature = _adjust_params_for_retry(
+                        enhanced_params, retry_count
+                    )
+                    enhanced_params = RequestParams(
+                        maxTokens=new_max_tokens,
+                        temperature=new_temperature,
+                        max_iterations=max_iterations,
+                        tool_filter=tool_filter if tool_filter else None,
+                    )
+                    await asyncio.sleep(3)  # Longer pause before retry
+
+        except Exception as e:
+            print(f"\n❌ Error in code analysis attempt {retry_count + 1}: {e}")
+            retry_count += 1
+            
+            if retry_count < max_retries:
+                print(f"⏳ Retrying in 5 seconds...")
+                await asyncio.sleep(5)
+                # Adjust parameters for retry
                 new_max_tokens, new_temperature = _adjust_params_for_retry(
                     enhanced_params, retry_count
                 )
+<<<<<<< HEAD
+                new_max_tokens, new_temperature = _adjust_params_for_retry(
+                    enhanced_params, retry_count
+                )
+=======
+>>>>>>> c4bb4b0 (chore: checkpoint local edits before fork/upstream sync)
                 enhanced_params = RequestParams(
                     maxTokens=new_max_tokens,
                     temperature=new_temperature,
                     max_iterations=max_iterations,
+<<<<<<< HEAD
                     tool_filter=tool_filter
                     if tool_filter
                     else None,  # None = all tools, empty dict = no filtering
+=======
+                    tool_filter=tool_filter if tool_filter else None,
+>>>>>>> c4bb4b0 (chore: checkpoint local edits before fork/upstream sync)
                 )
-                retry_count += 1
-
-        except Exception as e:
-            print(f"❌ Error in code analysis attempt {retry_count + 1}: {e}")
-            retry_count += 1
-            if retry_count >= max_retries:
+            else:
+                print(f"❌ Max retries ({max_retries}) reached")
+                if result:
+                    print("⚠️ Returning last partial result")
+                    return result
                 raise
 
-    print(f"⚠️ Returning potentially incomplete result after {max_retries} attempts")
+    print(f"\n⚠️ Returning potentially incomplete result after {max_retries} attempts")
     return result
-
 
 async def github_repo_download(search_result: str, paper_dir: str, logger) -> str:
     """
@@ -957,7 +1135,7 @@ async def _process_input_source(input_source: str, logger) -> str:
         return file_path
     return input_source
 
-
+@weave.op
 async def orchestrate_research_analysis_agent(
     input_source: str, logger, progress_callback: Optional[Callable] = None
 ) -> Tuple[str, str]:
@@ -996,6 +1174,7 @@ async def orchestrate_research_analysis_agent(
     return analysis_result, download_result
 
 
+@weave.op
 async def synthesize_workspace_infrastructure_agent(
     download_result: str, logger, workspace_dir: Optional[str] = None
 ) -> Dict[str, str]:
@@ -1039,6 +1218,7 @@ async def synthesize_workspace_infrastructure_agent(
     }
 
 
+@weave.op
 async def orchestrate_reference_intelligence_agent(
     dir_info: Dict[str, str], logger, progress_callback: Optional[Callable] = None
 ) -> str:
@@ -1220,6 +1400,7 @@ async def orchestrate_document_preprocessing_agent(
         }
 
 
+@weave.op
 async def orchestrate_code_planning_agent(
     dir_info: Dict[str, str], logger, progress_callback: Optional[Callable] = None
 ):
@@ -1327,6 +1508,7 @@ async def automate_repository_acquisition_agent(
         raise e  # Re-raise to be handled by the main pipeline
 
 
+@weave.op
 async def orchestrate_codebase_intelligence_agent(
     dir_info: Dict[str, str], logger, progress_callback: Optional[Callable] = None
 ) -> Dict:
@@ -1454,6 +1636,7 @@ async def orchestrate_codebase_intelligence_agent(
         return error_report
 
 
+@weave.op
 async def synthesize_code_implementation_agent(
     dir_info: Dict[str, str],
     logger,
@@ -1539,6 +1722,7 @@ async def synthesize_code_implementation_agent(
         return {"status": "error", "message": str(e)}
 
 
+@weave.op
 async def run_chat_planning_agent(user_input: str, logger) -> str:
     """
     Run the chat-based planning agent for user-provided coding requirements.
@@ -1648,6 +1832,7 @@ Please provide a detailed implementation plan that covers all aspects needed for
         raise
 
 
+@weave.op
 async def execute_multi_agent_research_pipeline(
     input_source: str,
     logger,
@@ -1866,6 +2051,7 @@ async def paper_code_preparation(
     )
 
 
+@weave.op
 async def execute_chat_based_planning_pipeline(
     user_input: str,
     logger,

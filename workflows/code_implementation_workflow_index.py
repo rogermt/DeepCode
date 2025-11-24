@@ -994,6 +994,17 @@ Requirements:
         openai_messages = [{"role": "system", "content": system_message}]
         openai_messages.extend(messages)
 
+        e=1/0
+
+        for message in openai_messages:  
+            if message.get("role") == "tool":  
+                content = message.get("content")  
+                if isinstance(content, list):  
+                    message["content"] = "".join(  
+                        block.get("text", "") for block in content if isinstance(block, dict)  
+                    )  
+
+
         # Retry mechanism for API calls
         max_retries = 3
         retry_delay = 2  # seconds

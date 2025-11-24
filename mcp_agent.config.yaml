@@ -1,6 +1,6 @@
 $schema: ./schema/mcp-agent.config.schema.json
 anthropic: null
-default_search_server: brave
+default_search_server: bocha-mcp
 document_segmentation:
   enabled: false
   size_threshold_chars: 50000
@@ -124,3 +124,4 @@ anthropic:
   default_model: "claude-sonnet-4.5"
 
 planning_mode: traditional
+otlp_endpoint: "http://localhost:4317"

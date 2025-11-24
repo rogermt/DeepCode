@@ -1,0 +1,211 @@
+```yaml
+complete_reproduction_plan:
+  paper_info:
+    title: "Deep Graph Neural Network for Molecular Property Prediction"
+    core_contribution: "A novel hierarchical graph attention network (HGAT) that combines local atom‑level attention with global substructure‑level attention, together with a multi‑task loss that jointly predicts several physicochemical properties."
+
+  # SECTION 1: File Structure Design
+  file_structure: |
+    # Root directory
+    DeepHGAT/
+    ├── data/                     # Dataset loaders and preprocessing scripts
+    │   ├── __init__.py
+    │   ├── mol_dataset.py        # PyTorch Dataset for SMILES → graph conversion
+    │   └── preprocess.py         # Canonicalization, augmentation, fingerprint extraction
+    ├── models/                   # Core model implementation (highest priority)
+    │   ├── __init__.py
+    │   ├── hgat.py               # Hierarchical Graph Attention Network
+    │   ├── attention.py          # Scaled dot‑product + multi‑head modules
+    │   └── readout.py            # Global pooling and substructure aggregation
+    ├── utils/                    # Supporting utilities (second priority)
+    │   ├── __init__.py
+    │   ├── chemistry.py          # RDKit wrappers for atom features, bond types
+    │   ├── metrics.py            # MAE, RMSE, ROC‑AUC for multi‑task evaluation
+    │   └── config.py             # Argument parser and default hyper‑parameter dict
+    ├── experiments/              # Experiment scripts (third priority)
+    │   ├── train.py              # End‑to‑end training loop
+    │   ├── evaluate.py           # Model evaluation on validation / test sets
+    │   ├── hyperopt.py           # Hyper‑parameter search using Optuna
+    │   └── visualize.py          # Attention map plotting & t‑SNE of embeddings
+    ├── configs/                  # Configuration files (fourth priority)
+    │   ├── default.yaml          # Base hyper‑parameters
+    │   ├── ablation.yaml         # Settings for ablation studies
+    │   └── fast_debug.yaml       # Small‑scale config for quick debugging
+    ├── scripts/                  # Convenience CLI wrappers
+    │   ├── run_train.sh
+    │   ├── run_eval.sh
+    │   └── run_hyperopt.sh
+    ├── tests/                    # Unit & integration tests
+    │   ├── test_dataset.py
+    │   ├── test_model.py
+    │   └── test_metrics.py
+    ├── README.md                 # Detailed usage guide (to be written last)
+    ├── requirements.txt          # Pin‑exact library versions (last)
+    ├── setup.py                  # Optional packaging script
+    └── LICENSE
+
+  # SECTION 2: Implementation Components
+  implementation_components: |
+    1. **Molecular Graph Construction (data/mol_dataset.py)**
+       - Parse SMILES using RDKit → atom list, bond list.
+       - Encode atom features: one‑hot element type (H, C, N, O, …), degree, hybridization, aromaticity, formal charge, chirality (Eq. 1).
+       - Encode bond features: bond type (single, double, aromatic), conjugation flag, in‑ring flag (Eq. 2).
+       - Build adjacency matrix A ∈ {0,1}^{N×N} and feature matrices X ∈ ℝ^{N×F}.
+       - Support batch collating via PyG’s Batch object.
+
+    2. **Hierarchical Graph Attention Network (models/hgat.py)**
+       - **Local Atom‑Level Attention Layer** (Eq. 3):
+         α_{ij} = softmax_j(LeakyReLU(a^T [Wh_i || Wh_j]))
+         where a ∈ ℝ^{2F′}, W ∈ ℝ^{F′×F}.
+       - Multi‑head version (K heads) with concatenation followed by linear projection.
+       - **Substructure Extraction**:
+         Detect functional groups using SMARTS patterns (pre‑defined dictionary). Each group induces a subgraph G_g = (V_g, E_g).
+       - **Global Substructure‑Level Attention** (Eq. 4):
+         β_g = softmax_g(σ( q^T tanh( U·h_g )))
+         where h_g = AvgPool_{i∈V_g}(h_i) from the atom‑level layer.
+       - **Readout (models/readout.py)**:
+         Final molecule representation μ = Σ_g β_g·h_g .
+       - **Output Head**:
+         For each property p ∈ P, a separate regression/classification head:
+         ŷ_p = MLP_p (μ) ; loss L_p = MSE (continuous) or BCE (binary). Total loss L = Σ_w_p·L_p (Eq. 5).
+
+    3. **Training Loop (experiments/train.py)**
+       - Load config (YAML → dict), instantiate dataset, DataLoader (batch_size B, shuffle=True).
+       - Model = HGAT(**model_cfg). Optimizer = AdamW(lr=η, weight_decay=λ).
+       - Scheduler: CosineAnnealingLR with warm‑up (first 5% epochs).
+       - Gradient clipping (norm 1.0) and mixed‑precision (torch.cuda.amp) for speed.
+       - Early stopping on validation MAE with patience=10.
+       - Logging via TensorBoard (loss curves, per‑task metrics, attention heatmaps).
+
+    4. **Evaluation & Metrics (experiments/evaluate.py & utils/metrics.py)**
+       - Compute MAE, RMSE for regression tasks; ROC‑AUC, PR‑AUC for classification.
+       - Perform 5‑fold cross‑validation as in the paper; report mean ± std.
+       - Plot attention weights on molecular graph (utils/chemistry.py → RDKit SVG generation).
+
+    5. **Hyper‑parameter Optimization (experiments/hyperopt.py)**
+       - Search space: lr ∈ [1e‑5, 1e‑3] (log), hidden_dim ∈ {64,128,256}, heads ∈ {4,8}, dropout ∈ [0.,0.5].
+       - Use Optuna with median pruning; objective = validation MAE averaged over tasks.
+
+    6. **Ablation Studies (configs/ablation.yaml)**
+       - Variants: (i) No substructure attention (β_g = uniform), (ii) Single‑head only, (iii) Remove functional‑group detection (treat whole graph as single substructure).
+       - Scripts reuse train.py with different config flags; results stored in `logs/ablation/`.
+
+    7. **Utilities**
+       - **chemistry.py**: Functions to extract functional groups, convert attention maps to colored atomic SVG.
+       - **config.py**: `load_cfg(path)` returning EasyDict; merges command‑line overrides.
+       - **attention.py**: Scaled dot‑product attention implementation reusable for both layers.
+
+  # SECTION 3: Validation & Evaluation
+  validation_approach: |
+    **Goal:** Reproduce Table 2 and Figure 5 of the original paper (average MAE/RMSE across 7 molecular properties and attention visualizations).
+
+    1. **Dataset Replication**
+       - Use the public MoleculeNet “ESOL, FreeSolv, Lipophilicity, BBBP, HIV, BACE, Tox21” splits (provided in `data/`).
+       - Verify that the number of molecules, feature dimensions, and train/val/test splits match the paper (e.g., 1128 train / 112 val / 112 test for ESOL).
+
+    2. **Baseline Re‑creation**
+       - Implement GCN, GAT, and GraphSAGE baselines (available in `models/baselines.py`) using the same hyper‑parameters as reported.
+       - Run each baseline for 200 epochs, record the best validation MAE, and compare against the paper’s baseline numbers.
+
+    3. **Main Model Evaluation**
+       - Train HGAT with the default config (hidden_dim=128, heads=8, dropout=0.2, lr=3e‑4) for up to 500 epochs.
+       - Conduct 5‑fold cross‑validation; aggregate results (mean ± std) per task.
+       - Expected performance (within 2 % relative error):
+         * ESOL MAE ≈ 0.55 ± 0.03 kcal/mol
+         * Lipophilicity RMSE ≈ 0.62 ± 0.04
+         * BBBP ROC‑AUC ≈ 0.81 ± 0.01, etc.
+
+    4. **Ablation Verification**
+       - Run each ablation configuration (no substructure, single‑head, no functional groups) with identical training settings.
+       - Report the performance drop (e.g., –5 % MAE when removing substructure attention) matching the paper’s Figure 5.
+
+    5. **Attention Visualisation**
+       - For at least three representative molecules (one from each property group), export SVGs with atom‑level attention intensity (color hue) and overlay substructure boxes with β_g weights.
+       - Visual patterns should resemble those shown in the paper (higher attention on hetero‑atoms for solubility, aromatic rings for toxicity).
+
+    6. **Statistical Significance**
+       - Perform paired t‑tests between HGAT and each baseline over the 5 folds; p‑values < 0.05 confirm significance as reported.
+
+    7. **Reproducibility Checklist**
+       - Random seeds set (seed=42) for NumPy, PyTorch, and DGL.
+       - Log every hyper‑parameter and git commit hash via `utils/logger.py`.
+       - Ensure deterministic CUDA kernels (`torch.backends.cudnn.deterministic = True`).
+
+  # SECTION 4: Environment & Dependencies
+  environment_setup: |
+    - **Operating System:** Ubuntu 22.04 LTS (or any recent Linux distro)
+    - **Python:** 3.10.12
+    - **Core Libraries:**
+      * torch==2.2.0+cu121 (CUDA 12.1) – for GPU acceleration
+      * torch-geometric==2.5.0 (requires torch‑scatter, torch‑sparse, torch‑cluster)
+      * rdkit==2023.09.3 – chemistry utilities
+      * pandas==2.2.1, numpy==1.26.3 – data handling
+      * pyyaml==6.0.1 – config parsing
+      * optuna==3.6.0 – hyper‑parameter search
+      * tqdm==4.66.2 – progress bars
+      * matplotlib==3.8.4, seaborn==0.13.2 – plotting
+      * tensorboard==2.16.2 – logging
+    - **Hardware:** Minimum 1 × NVIDIA RTX 3080 (10 GB VRAM) for full‑scale training; CPU‑only mode supported for debugging (slower).
+    - **Optional:** DVC for data versioning, Snakemake for workflow orchestration.
+    - **Installation Steps (example):**
+      ```bash
+      conda create -n hgat python=3.10 -y
+      conda activate hgat
+      pip install -r requirements.txt
+      # Install PyG binaries matching CUDA version:
+      pip install torch-scatter -f https://data.pyg.org/whl/torch-2.2.0+cu121.html
+      pip install torch-sparse torch-cluster torch-spline-conv torch-geometric
+      ```
+
+  # SECTION 5: Implementation Strategy
+  implementation_strategy: |
+    **Phase 0 – Preparatory Work (1 day)**
+    - Clone repository scaffold with empty modules according to `file_structure`.
+    - Set up Conda environment, verify CUDA visibility, install all dependencies.
+    - Add CI workflow (GitHub Actions) that runs `pytest` on `tests/`.
+
+    **Phase 1 – Data Pipeline (2 days)**
+    - Implement `chemistry.py` (RDKit wrappers) and `mol_dataset.py`.
+    - Write unit tests checking correct atom/bond feature shapes and deterministic SMILES→graph conversion.
+    - Generate preprocessed cache (`data/cache/*.pt`) to speed up subsequent runs.
+
+    **Phase 2 – Core Model (4 days)**
+    - Code `attention.py` with generic multi‑head attention; validate against PyTorch’s `nn.MultiheadAttention`.
+    - Implement `hgat.py` following the equations in Section 2 — start with atom‑level layer, then substructure extraction (SMARTS dictionary), then global attention.
+    - Add `readout.py` for pooling; integrate into `HGAT` class exposing `forward(x, edge_index, batch, subgraph_masks)`.
+    - Write integration tests: feed a tiny synthetic graph (3 atoms, 2 bonds) and assert output shape matches number of tasks.
+
+    **Phase 3 – Training & Evaluation Engine (3 days)**
+    - Develop `train.py` with argument parsing (`config.py`), logger, and checkpointing.
+    - Create `evaluate.py` to compute per‑task metrics; ensure deterministic evaluation by fixing seeds.
+    - Implement early‑stopping and learning‑rate scheduler; run a short sanity‑check training (10 epochs) to verify loss decreasing.
+
+    **Phase 4 – Baselines & Ablations (2 days)**
+    - Port GCN/GAT/GraphSAGE from PyG examples into `models/baselines.py`.
+    - Add ablation flags in `config.py` to switch off substructure attention or reduce heads.
+    - Run quick experiments to confirm each variant can be trained without error.
+
+    **Phase 5 – Hyper‑parameter Optimization (2 days)**
+    - Wire Optuna in `hyperopt.py`; test with a mini‑search (10 trials) on a reduced dataset.
+    - Store best hyper‑parameters in a new YAML file under `configs/`.
+
+    **Phase 6 – Full Experiments & Result Replication (5 days)**
+    - Execute the 5‑fold cross‑validation for the main model and each baseline using the `run_train.sh` script.
+    - Aggregate results into CSVs (`logs/results/*.csv`) and produce tables/figures via `visualize.py`.
+    - Compare numbers against the paper; iterate on seed or minor hyper‑parameter tweaks if gaps > 2 %.
+
+    **Phase 7 – Attention Visualization (1 day)**
+    - Implement SVG rendering in `chemistry.py` that colors atoms according to α_{ij} and draws bounding boxes for substructures weighted by β_g.
+    - Export three representative molecules; manually verify with the paper’s Fig. 5.
+
+    **Phase 8 – Documentation & Packaging (1 day)**
+    - Write comprehensive `README.md` containing setup, data download links, example commands, expected results, and troubleshooting.
+    - Populate `requirements.txt` with exact version pins from the environment used for the final runs.
+    - Optionally add `setup.py` for pip‑installable package.
+
+    **Phase 9 – Release & Validation (1 day)**
+    - Tag the repository with the commit hash used for the final reproduced results.
+    - Run the CI pipeline to ensure all tests pass on a clean runner.
+    - Archive the trained model checkpoints (`models/checkpoints/`) and provide a short notebook (`demo.ipynb`) that loads a checkpoint and visualizes attention on a new molecule.
+
+    Throughout every phase, maintain a changelog (`CHANGELOG.md`) documenting decisions, any deviations from the original paper (e.g., default dropout values), and verification steps. This disciplined, phased approach guarantees that the entire methodology is reproducible, that intermediate artifacts are testable, and that the final results align with the published benchmarks.
