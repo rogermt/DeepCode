@@ -696,6 +696,16 @@
       "type": "string",
       "description": "Execution engine for the MCP Agent application"
     },
+    "planning_mode": {  
+      "default": "parallel",  
+      "enum": [  
+        "parallel",  
+        "sequential"  
+      ],  
+      "title": "Planning Mode",  
+      "type": "string",  
+      "description": "Execution mode for code planning agents: parallel (faster, higher rate limits) or sequential (slower, lower rate limits)"  
+    },
     "temporal": {
       "anyOf": [
         {

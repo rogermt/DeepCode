@@ -197,6 +197,21 @@ def _adjust_params_for_retry(
     # )
     return new_max_tokens, new_temperature
 
+def get_planning_mode() -> str:  
+    """  
+    Get the planning mode from configuration.  
+      
+    Returns:  
+        str: "parallel" or "sequential"  
+    """  
+    try:  
+        import yaml  
+        with open("mcp_agent.config.yaml", "r") as f:  
+            config = yaml.safe_load(f)  
+            return config.get("planning_mode", "parallel")  
+    except Exception as e:  
+        print(f"⚠️ Error reading planning_mode from config: {e}, defaulting to parallel")  
+        return "parallel"
 
 async def execute_requirement_analysis_workflow(
     user_input: str,
@@ -634,304 +649,340 @@ Use the appropriate tool to complete this task."""
         )
 
 
-async def run_code_analyzer(
-    paper_dir: str, logger, use_segmentation: bool = True
-) -> str:
-    """
-    Run the adaptive code analysis workflow with optimized file reading.
-
-    This function minimizes LLM tool calls by:
-    1. Reading paper file directly (deterministic, no LLM needed)
-    2. Passing paper content directly to agents
-    3. LLM only used for analysis and search decisions
-
-    Orchestrates three specialized agents:
-    - ConceptAnalysisAgent: Analyzes system architecture and conceptual framework
-    - AlgorithmAnalysisAgent: Extracts algorithms, formulas, and technical details
-    - CodePlannerAgent: Integrates outputs into a comprehensive implementation plan
-
-    Args:
-        paper_dir: Directory path containing the research paper and related resources
-        logger: Logger instance for logging information
-        use_segmentation: Whether to use document segmentation capabilities
-
-    Returns:
-        str: Comprehensive analysis result from the coordinated agents
-    """
-    print(
-        f"📊 Code analysis mode: {'Segmented' if use_segmentation else 'Traditional'}"
-    )
-    print("   🔧 Optimized workflow: Direct file reading, LLM only for analysis")
-
-    # STEP 1: Read paper file directly - no LLM needed for deterministic file operations
-    paper_content = None
-    paper_file_path = None
-
-    try:
-        # Find .md file in paper directory - simple file system operation
-        for filename in os.listdir(paper_dir):
-            if filename.endswith(".md"):
-                paper_file_path = os.path.join(paper_dir, filename)
-                with open(paper_file_path, "r", encoding="utf-8") as f:
-                    paper_content = f.read()
-                logger.info(
-                    f"📄 Paper file loaded: {paper_file_path} ({len(paper_content)} chars)"
-                )
-                break
-
-        if not paper_content:
-            logger.warning(
-                f"⚠️ No .md file found in {paper_dir}, agents will search for it"
-            )
-    except Exception as e:
-        logger.warning(f"⚠️ Error reading paper file: {e}, agents will search for it")
-
-    # STEP 2: Configure agents with minimal tool access
-    search_server_names = get_search_server_names()
-    agent_config = get_adaptive_agent_config(use_segmentation, search_server_names)
-    prompts = get_adaptive_prompts(use_segmentation)
-
-    if paper_content:
-        agent_config = {
-            "concept_analysis": [],
-            "algorithm_analysis": ["brave"],
-            "code_planner": [
-                "brave"
-            ],  # Empty list instead of None - code planner doesn't need tools when paper content is provided
-        }
-        # agent_config = {
-        #     "concept_analysis": [],
-        #     "algorithm_analysis": [],
-        #     "code_planner": [],  # Empty list instead of None - code planner doesn't need tools when paper content is provided
-        # }
-    else:
-        agent_config = {
-            "concept_analysis": ["filesystem"],
-            "algorithm_analysis": ["brave", "filesystem"],
-            "code_planner": ["brave", "filesystem"],
-        }
-
-    print(f"   Agent configurations: {agent_config}")
-
-    concept_analysis_agent = Agent(
-        name="ConceptAnalysisAgent",
-        instruction=prompts["concept_analysis"],
-        server_names=agent_config["concept_analysis"],
-    )
-    algorithm_analysis_agent = Agent(
-        name="AlgorithmAnalysisAgent",
-        instruction=prompts["algorithm_analysis"],
-        server_names=agent_config["algorithm_analysis"],
-    )
-    code_planner_agent = Agent(
-        name="CodePlannerAgent",
-        instruction=prompts["code_planning"],
-        server_names=agent_config["code_planner"],
-    )
-
-    code_aggregator_agent = ParallelLLM(
-        fan_in_agent=code_planner_agent,
-        fan_out_agents=[concept_analysis_agent, algorithm_analysis_agent],
-        llm_factory=get_preferred_llm_class(),
-    )
-
-    base_max_tokens, _ = get_token_limits()
-
-    # STEP 3: Configure parameters - minimal tool filter since paper content is provided
-    if use_segmentation:
-        max_tokens_limit = base_max_tokens
-        temperature = 0.2
-        max_iterations = 5
-        print(
-            f"🧠 Using SEGMENTED mode: max_tokens={base_max_tokens} for complete YAML output"
-        )
-
-        # Segmentation mode: Only use segmentation tools if needed (paper content already provided)
-        tool_filter = {
-            "document-segmentation": {"read_document_segments", "get_document_overview"}
-            if not paper_content
-            else set(),  # Empty if paper already loaded
-            # "brave" not in filter = all brave tools available for searching
-        }
-    else:
-        max_tokens_limit = base_max_tokens
-        temperature = 0.3
-        max_iterations = 2
-        print(
-            f"🧠 Using TRADITIONAL mode: max_tokens={base_max_tokens} for complete YAML output"
-        )
-
-        # Traditional mode: No filesystem tools needed (paper content already provided)
-        if paper_content:
-            tool_filter = {
-                # Only brave search available - no filesystem tools needed
-            }
-        else:
-            tool_filter = {
-                "filesystem": {
-                    "read_text_file",
-                    "list_directory",
-                }
-            }
-
-    enhanced_params = RequestParams(
-        maxTokens=max_tokens_limit,
-        temperature=temperature,
-        max_iterations=max_iterations,
-        tool_filter=tool_filter
-        if tool_filter
-        else None,  # None = all tools, empty dict = no filtering
-    )
-
-    # STEP 4: Construct message with paper content directly included
-    if paper_content:
-        # Paper content provided directly - LLM only needs to analyze, not read files
-        message = f"""Analyze the research paper provided below. The paper file has been pre-loaded for you.
-
-    === PAPER CONTENT START ===
-    {paper_content}
-    === PAPER CONTENT END ===
-
-    Based on this paper, generate a comprehensive code reproduction plan that includes:
-
-    1. Complete system architecture and component breakdown
-    2. All algorithms, formulas, and implementation details
-    3. Detailed file structure and implementation roadmap
-
-    You may use web search (brave_web_search) if you need clarification on algorithms, methods, or concepts.
-
-    The goal is to create a reproduction plan detailed enough for independent implementation."""
-    else:
-        # Fallback: paper not found, agents will need to find it
-        message = f"""Analyze the research paper in directory: {paper_dir}
-
-    Please locate and analyze the markdown (.md) file containing the research paper. Based on your analysis, generate a comprehensive code reproduction plan that includes:
-
-    1. Complete system architecture and component breakdown
-    2. All algorithms, formulas, and implementation details
-    3. Detailed file structure and implementation roadmap
-
-    The goal is to create a reproduction plan detailed enough for independent implementation."""
-
-    # Set base_message for use in phases
-    base_message = message
-
-    max_retries = 3
-    retry_count = 0
-    result = ""
-
-    while retry_count < max_retries:
-        try:
-            print(f"🚀 Attempting code analysis (attempt {retry_count + 1}/{max_retries})")
-
-            # SEQUENTIAL EXECUTION: Phase 1 - Concept Analysis
-            print("🔍 Phase 1/3: Concept Analysis...")
-            concept_analysis_agent = Agent(
-                name="ConceptAnalysisAgent",
-                instruction=prompts["concept_analysis"],
-                server_names=agent_config["concept_analysis"],
-            )
-            concept_message = f"""{base_message}
-
-Based on this paper, analyze the system architecture and conceptual framework."""
-
-            async with concept_analysis_agent:
-                concept_analyzer = await concept_analysis_agent.attach_llm(get_preferred_llm_class())
-                concept_result = await concept_analyzer.generate_str(
-                    message=concept_message, request_params=enhanced_params
-                )
-                print(f"  ✓ Complete ({len(concept_result)} chars)")
-
-            await asyncio.sleep(2)  # Rate limit protection
-
-            # SEQUENTIAL EXECUTION: Phase 2 - Algorithm Analysis
-            print("🧮 Phase 2/3: Algorithm Analysis...")
-            algorithm_analysis_agent = Agent(
-                name="AlgorithmAnalysisAgent",
-                instruction=prompts["algorithm_analysis"],
-                server_names=agent_config["algorithm_analysis"],
-            )
-            algorithm_message = f"""{base_message}
-
-Based on this paper, extract all algorithms, formulas, and technical implementation details."""
-
-            async with algorithm_analysis_agent:
-                algorithm_analyzer = await algorithm_analysis_agent.attach_llm(get_preferred_llm_class())
-                algorithm_result = await algorithm_analyzer.generate_str(
-                    message=algorithm_message, request_params=enhanced_params
-                )
-                print(f"  ✓ Complete ({len(algorithm_result)} chars)")
-
-            await asyncio.sleep(2)  # Rate limit protection
-
-            # SEQUENTIAL EXECUTION: Phase 3 - Code Planning (with context)
-            print("📋 Phase 3/3: Code Planning...")
-            code_planner_agent = Agent(
-                name="CodePlannerAgent",
-                instruction=prompts["code_planning"],
-                server_names=agent_config["code_planner"],
-            )
-            planner_message = f"""{base_message}
-
-## Previous Analysis Results
-
-### Concept Analysis:
-{concept_result}
-
-### Algorithm Analysis:
-{algorithm_result}
-
----
-
-Based on the above analyses, generate a comprehensive code reproduction plan that includes:
-
-1. Complete system architecture and component breakdown
-2. All algorithms, formulas, and implementation details
-3. Detailed file structure and implementation roadmap
-
-The goal is to create a reproduction plan detailed enough for independent implementation."""
-
-            async with code_planner_agent:
-                code_planner = await code_planner_agent.attach_llm(get_preferred_llm_class())
-                result = await code_planner.generate_str(
-                    message=planner_message, request_params=enhanced_params
-                )
-                print(f"  ✓ Complete ({len(result)} chars)")
-
-            print(f"🔍 Code analysis result:\n{result}")
-
-            completeness_score = _assess_output_completeness(result)
-            print(f"📊 Output completeness score: {completeness_score:.2f}/1.0")
-
-            if completeness_score >= 0.8:
-                print(f"✅ Code analysis completed successfully (length: {len(result)} chars)")
-                return result
-            else:
-                print(f"⚠️ Output appears truncated (score: {completeness_score:.2f}), retrying with enhanced parameters...")
-                new_max_tokens, new_temperature = _adjust_params_for_retry(enhanced_params, retry_count)
-                enhanced_params = RequestParams(
-                    maxTokens=new_max_tokens,
-                    temperature=new_temperature,
-                    max_iterations=max_iterations,
-                    tool_filter=tool_filter if tool_filter else None,
-                )
-                retry_count += 1
-                await asyncio.sleep(3)  # Longer pause before retry
-
-        except Exception as e:
-            print(f"❌ Error in code analysis attempt {retry_count + 1}: {e}")
-            retry_count += 1
-            if retry_count < max_retries:
-                await asyncio.sleep(5)  # Pause before retry after error
-            else:
-                if result:
-                    print("⚠️ Returning last partial result")
-                    return result
-                raise
-
-    print(f"⚠️ Returning potentially incomplete result after {max_retries} attempts")
+async def run_code_analyzer(  
+    paper_dir: str, logger, use_segmentation: bool = True  
+) -> str:  
+    """  
+    Run the adaptive code analysis workflow with configurable execution mode.  
+      
+    Supports both parallel and sequential execution based on configuration.  
+    """  
+    # Read configuration  
+    planning_mode = get_planning_mode()  
+      
+    print(f"📊 Code analysis mode: {'Segmented' if use_segmentation else 'Traditional'}")  
+    print(f"   🔧 Execution mode: {planning_mode.upper()}")  
+    print("   🔧 Optimized workflow: Direct file reading, LLM only for analysis")  
+  
+    # STEP 1: Read paper file directly  
+    paper_content = None  
+    paper_file_path = None  
+  
+    try:  
+        for filename in os.listdir(paper_dir):  
+            if filename.endswith(".md"):  
+                paper_file_path = os.path.join(paper_dir, filename)  
+                with open(paper_file_path, "r", encoding="utf-8") as f:  
+                    paper_content = f.read()  
+                logger.info(f"📄 Paper file loaded: {paper_file_path} ({len(paper_content)} chars)")  
+                break  
+  
+        if not paper_content:  
+            logger.warning(f"⚠️ No .md file found in {paper_dir}, agents will search for it")  
+    except Exception as e:  
+        logger.warning(f"⚠️ Error reading paper file: {e}, agents will search for it")  
+  
+    # STEP 2: Configure agents  
+    search_server_names = get_search_server_names()  
+    agent_config = get_adaptive_agent_config(use_segmentation, search_server_names)  
+    prompts = get_adaptive_prompts(use_segmentation)  
+  
+    if paper_content:  
+        agent_config = {  
+            "concept_analysis": [],  
+            "algorithm_analysis": ["brave"],  
+            "code_planner": ["brave"],  
+        }  
+    else:  
+        agent_config = {  
+            "concept_analysis": ["filesystem"],  
+            "algorithm_analysis": ["brave", "filesystem"],  
+            "code_planner": ["brave", "filesystem"],  
+        }  
+  
+    print(f"   Agent configurations: {agent_config}")  
+  
+    # STEP 3: Configure parameters  
+    base_max_tokens, _ = get_token_limits()  
+      
+    if use_segmentation:  
+        max_tokens_limit = base_max_tokens  
+        temperature = 0.2  
+        max_iterations = 5  
+        print(f"🧠 Using SEGMENTED mode: max_tokens={base_max_tokens}")  
+          
+        tool_filter = {  
+            "document-segmentation": {  
+                "read_document_segments",  
+                "get_document_overview"  
+            } if not paper_content else set(),  
+        }  
+    else:  
+        max_tokens_limit = base_max_tokens  
+        temperature = 0.3  
+        max_iterations = 2  
+        print(f"🧠 Using TRADITIONAL mode: max_tokens={base_max_tokens}")  
+          
+        if paper_content:  
+            tool_filter = {}  
+        else:  
+            tool_filter = {  
+                "filesystem": {  
+                    "read_text_file",  
+                    "list_directory",  
+                }  
+            }  
+  
+    enhanced_params = RequestParams(  
+        maxTokens=max_tokens_limit,  
+        temperature=temperature,  
+        max_iterations=max_iterations,  
+        tool_filter=tool_filter if tool_filter else None,  
+    )  
+  
+    # STEP 4: Prepare base message  
+    if paper_content:  
+        base_message = f"""Analyze the research paper provided below. The paper file has been pre-loaded for you.  
+  
+=== PAPER CONTENT START ===  
+{paper_content}  
+=== PAPER CONTENT END ===  
+  
+You may use web search (brave_web_search) if you need clarification on algorithms, methods, or concepts."""  
+    else:  
+        base_message = f"""Analyze the research paper in directory: {paper_dir}  
+  
+Please locate and analyze the markdown (.md) file containing the research paper."""  
+  
+    # STEP 5: Execute based on planning mode  
+    if planning_mode == "sequential":  
+        return await _run_sequential_analysis(  
+            base_message, agent_config, prompts, enhanced_params,   
+            max_iterations, tool_filter, logger  
+        )  
+    else:  
+        return await _run_parallel_analysis(  
+            paper_dir, agent_config, prompts, enhanced_params, logger  
+        )  
+  
+  
+async def _run_parallel_analysis(  
+    paper_dir: str, agent_config: dict, prompts: dict,   
+    enhanced_params: RequestParams, logger  
+) -> str:  
+    """Execute parallel analysis using ParallelLLM pattern."""  
+    concept_analysis_agent = Agent(  
+        name="ConceptAnalysisAgent",  
+        instruction=prompts["concept_analysis"],  
+        server_names=agent_config["concept_analysis"],  
+    )  
+    algorithm_analysis_agent = Agent(  
+        name="AlgorithmAnalysisAgent",  
+        instruction=prompts["algorithm_analysis"],  
+        server_names=agent_config["algorithm_analysis"],  
+    )  
+    code_planner_agent = Agent(  
+        name="CodePlannerAgent",  
+        instruction=prompts["code_planning"],  
+        server_names=agent_config["code_planner"],  
+    )  
+  
+    code_aggregator_agent = ParallelLLM(  
+        fan_in_agent=code_planner_agent,  
+        fan_out_agents=[concept_analysis_agent, algorithm_analysis_agent],  
+        llm_factory=get_preferred_llm_class(),  
+    )  
+  
+    message = f"""Analyze the research paper in directory: {paper_dir}  
+  
+Please locate and analyze the markdown (.md) file containing the research paper. Based on your analysis, generate a comprehensive code reproduction plan that includes:  
+  
+1. Complete system architecture and component breakdown  
+2. All algorithms, formulas, and implementation details  
+3. Detailed file structure and implementation roadmap  
+  
+The goal is to create a reproduction plan detailed enough for independent implementation."""  
+  
+    max_retries = 3  
+    retry_count = 0  
+  
+    while retry_count < max_retries:  
+        try:  
+            print(f"🚀 Attempting code analysis (attempt {retry_count + 1}/{max_retries})")  
+            result = await code_aggregator_agent.generate_str(  
+                message=message, request_params=enhanced_params  
+            )  
+  
+            completeness_score = _assess_output_completeness(result)  
+            print(f"📊 Output completeness score: {completeness_score:.2f}/1.0")  
+  
+            if completeness_score >= 0.8:  
+                print(f"✅ Code analysis completed successfully (length: {len(result)} chars)")  
+                return result  
+            else:  
+                print(f"⚠️ Output appears truncated (score: {completeness_score:.2f}), retrying...")  
+                enhanced_params = _adjust_params_for_retry(enhanced_params, retry_count)  
+                retry_count += 1  
+  
+        except Exception as e:  
+            print(f"❌ Error in code analysis attempt {retry_count + 1}: {e}")  
+            retry_count += 1  
+            if retry_count >= max_retries:  
+                raise  
+  
+    print(f"⚠️ Returning potentially incomplete result after {max_retries} attempts")  
+    return result  
+  
+  
+async def _run_sequential_analysis(  
+    base_message: str, agent_config: dict, prompts: dict,  
+    enhanced_params: RequestParams, max_iterations: int,   
+    tool_filter: dict, logger  
+) -> str:  
+    """Execute sequential analysis with rate limit protection."""  
+    max_retries = 3  
+    retry_count = 0  
+    result = ""  
+  
+    while retry_count < max_retries:  
+        try:  
+            print(f"\n{'='*70}")  
+            print(f"🚀 Code Analysis Attempt {retry_count + 1}/{max_retries} (Sequential Mode)")  
+            print(f"{'='*70}\n")  
+  
+            # Phase 1: Concept Analysis  
+            print("🔍 Phase 1/3: Running Concept Analysis Agent...")  
+            concept_analysis_agent = Agent(  
+                name="ConceptAnalysisAgent",  
+                instruction=prompts["concept_analysis"],  
+                server_names=agent_config["concept_analysis"],  
+            )  
+              
+            concept_message = f"""{base_message}  
+  
+Based on this paper, analyze the system architecture and conceptual framework."""  
+  
+            async with concept_analysis_agent:  
+                print("  → Analyzing system architecture and design patterns...")  
+                concept_analyzer = await concept_analysis_agent.attach_llm(get_preferred_llm_class())  
+                concept_result = await concept_analyzer.generate_str(  
+                    message=concept_message,   
+                    request_params=enhanced_params  
+                )  
+                print(f"  ✓ Concept analysis complete ({len(concept_result)} chars)")  
+  
+            await asyncio.sleep(2)  # Rate limit protection  
+  
+            # Phase 2: Algorithm Analysis  
+            print("\n🧮 Phase 2/3: Running Algorithm Analysis Agent...")  
+            algorithm_analysis_agent = Agent(  
+                name="AlgorithmAnalysisAgent",  
+                instruction=prompts["algorithm_analysis"],  
+                server_names=agent_config["algorithm_analysis"],  
+            )  
+              
+            algorithm_message = f"""{base_message}  
+  
+Based on this paper, extract all algorithms, formulas, and technical implementation details."""  
+  
+            async with algorithm_analysis_agent:  
+                print("  → Extracting algorithms, formulas, and data structures...")  
+                algorithm_analyzer = await algorithm_analysis_agent.attach_llm(get_preferred_llm_class())  
+                algorithm_result = await algorithm_analyzer.generate_str(  
+                    message=algorithm_message,   
+                    request_params=enhanced_params  
+                )  
+                print(f"  ✓ Algorithm analysis complete ({len(algorithm_result)} chars)")  
+  
+            await asyncio.sleep(2)  # Rate limit protection  
+  
+            # Phase 3: Code Planning  
+            print("\n📋 Phase 3/3: Running Code Planner Agent...")  
+            code_planner_agent = Agent(  
+                name="CodePlannerAgent",  
+                instruction=prompts["code_planning"],  
+                server_names=agent_config["code_planner"],  
+            )  
+              
+            planner_message = f"""{base_message}  
+  
+## Previous Analysis Results  
+  
+### Concept Analysis Output:  
+{concept_result}  
+  
+### Algorithm Analysis Output:  
+{algorithm_result}  
+  
+---  
+  
+Based on the above concept and algorithm analyses, generate a comprehensive code reproduction plan that includes:  
+  
+1. Complete system architecture and component breakdown  
+2. All algorithms, formulas, and implementation details  
+3. Detailed file structure and implementation roadmap  
+  
+The goal is to create a reproduction plan detailed enough for independent implementation."""  
+  
+            async with code_planner_agent:  
+                print("  → Synthesizing comprehensive code implementation plan...")  
+                code_planner = await code_planner_agent.attach_llm(get_preferred_llm_class())  
+                result = await code_planner.generate_str(  
+                    message=planner_message,   
+                    request_params=enhanced_params  
+                )  
+                print(f"  ✓ Code planning complete ({len(result)} chars)")  
+  
+            print(f"\n🔍 Code analysis result preview:\n{result[:500]}...")  
+              
+            completeness_score = _assess_output_completeness(result)  
+            print(f"📊 Output completeness score: {completeness_score:.2f}/1.0")  
+  
+            if completeness_score >= 0.8:  
+                print(f"✅ Code analysis completed successfully (length: {len(result)} chars)")  
+                return result  
+            else:  
+                print(f"⚠️ Output appears truncated (score: {completeness_score:.2f})")  
+                retry_count += 1  
+                  
+                if retry_count < max_retries:  
+                    print(f"   Retrying with enhanced parameters...")  
+                    new_max_tokens, new_temperature = _adjust_params_for_retry(  
+                        enhanced_params, retry_count  
+                    )  
+                    enhanced_params = RequestParams(  
+                        maxTokens=new_max_tokens,  
+                        temperature=new_temperature,  
+                        max_iterations=max_iterations,  
+                        tool_filter=tool_filter if tool_filter else None,  
+                    )  
+                    await asyncio.sleep(3)  
+  
+        except Exception as e:  
+            print(f"\n❌ Error in code analysis attempt {retry_count + 1}: {e}")  
+            retry_count += 1  
+              
+            if retry_count < max_retries:  
+                print(f"⏳ Retrying in 5 seconds...")  
+                await asyncio.sleep(5)  
+                new_max_tokens, new_temperature = _adjust_params_for_retry(  
+                    enhanced_params, retry_count  
+                )  
+                enhanced_params = RequestParams(  
+                    maxTokens=new_max_tokens,  
+                    temperature=new_temperature,  
+                    max_iterations=max_iterations,  
+                    tool_filter=tool_filter if tool_filter else None,  
+                )  
+            else:  
+                print(f"❌ Max retries ({max_retries}) reached")  
+                if result:  
+                    print("⚠️ Returning last partial result")  
+                    return result  
+                raise  
+  
+    print(f"\n⚠️ Returning potentially incomplete result after {max_retries} attempts")  
     return result
-
 
 async def github_repo_download(search_result: str, paper_dir: str, logger) -> str:
     """

@@ -5,6 +5,7 @@ document_segmentation:
   enabled: false
   size_threshold_chars: 50000
 execution_engine: asyncio
+planning_mode: "sequential"  # Options: "parallel" or "sequential"
 logger:
   level: info
   path_settings:
