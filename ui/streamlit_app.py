@@ -4,6 +4,7 @@ DeepCode - AI Research Engine
 Streamlit Web Interface Main Application File
 """
 
+import logging
 import os
 import sys
 import weave
@@ -19,6 +20,7 @@ if parent_dir not in sys.path:
 
 # Import UI modules
 from ui.layout import main_layout
+from utils.experiment_tracker import get_experiment_tracker
 
 
 def main():
@@ -27,11 +29,15 @@ def main():
 
     All UI logic has been modularized into ui/ folder
     """
+    # Initialize experiment tracker based on configuration
+    try:
+        tracker = get_experiment_tracker()
+    except Exception as e:
+        print(f"Error initializing experiment tracker: {e}")
+        
+        to
     # Run main layout
     sidebar_info = main_layout()
-
-    # Additional global logic can be added here if needed
-    weave.init('deepcode-streamlit')
 
     return sidebar_info
 

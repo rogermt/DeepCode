@@ -261,8 +261,9 @@ def get_adaptive_agent_config(
     Returns:
         Dict containing server configurations for different agents
     """
-    if search_server_names is None:
-        search_server_names = []
+    #if search_server_names is None:
+       # search_server_names = []
+    search_server_names = []
 
     # Base configuration
     config = {

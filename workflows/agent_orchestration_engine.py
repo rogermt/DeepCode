@@ -59,12 +59,15 @@ from utils.llm_utils import (
     get_adaptive_prompts,
     get_token_limits,
 )
+from utils.experiment_tracker import get_experiment_tracker 
 from workflows.agents.document_segmentation_agent import prepare_document_segments
 from workflows.agents.requirement_analysis_agent import RequirementAnalysisAgent
 
 # Environment configuration
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1"  # Prevent .pyc file generation
 
+# Initialize tracker based on config  
+tracker = get_experiment_tracker() 
 
 def _assess_output_completeness(text: str) -> float:
     """
@@ -197,21 +200,21 @@ def _adjust_params_for_retry(
     # )
     return new_max_tokens, new_temperature
 
-def get_planning_mode() -> str:  
-    """  
-    Get the planning mode from configuration.  
-      
-    Returns:  
-        str: "parallel" or "sequential"  
-    """  
-    try:  
-        import yaml  
-        with open("mcp_agent.config.yaml", "r") as f:  
-            config = yaml.safe_load(f)  
-            return config.get("planning_mode", "parallel")  
-    except Exception as e:  
-        print(f"⚠️ Error reading planning_mode from config: {e}, defaulting to parallel")  
-        return "parallel"
+def get_execution_mode() -> str:
+    """
+    Get the execution mode from configuration.
+
+    Returns:
+        str: "parallel" or "sequential"
+    """
+    try:
+        import yaml
+        with open("mcp_agent.config.yaml", "r") as f:
+            config = yaml.safe_load(f)
+            return config.get("execution_mode", "sequential")
+    except Exception as e:
+        print(f"⚠️ Error reading execution_mode from config: {e}, defaulting to sequential")
+        return "sequential"
 
 async def execute_requirement_analysis_workflow(
     user_input: str,
@@ -658,10 +661,10 @@ async def run_code_analyzer(
     Supports both parallel and sequential execution based on configuration.  
     """  
     # Read configuration  
-    planning_mode = get_planning_mode()  
+    execution_mode = get_execution_mode()  
       
     print(f"📊 Code analysis mode: {'Segmented' if use_segmentation else 'Traditional'}")  
-    print(f"   🔧 Execution mode: {planning_mode.upper()}")  
+    print(f"   🔧 Execution mode: {execution_mode.upper()}")  
     print("   🔧 Optimized workflow: Direct file reading, LLM only for analysis")  
   
     # STEP 1: Read paper file directly  
@@ -687,18 +690,18 @@ async def run_code_analyzer(
     agent_config = get_adaptive_agent_config(use_segmentation, search_server_names)  
     prompts = get_adaptive_prompts(use_segmentation)  
   
-    if paper_content:  
-        agent_config = {  
-            "concept_analysis": [],  
-            "algorithm_analysis": ["brave"],  
-            "code_planner": ["brave"],  
-        }  
-    else:  
-        agent_config = {  
-            "concept_analysis": ["filesystem"],  
-            "algorithm_analysis": ["brave", "filesystem"],  
-            "code_planner": ["brave", "filesystem"],  
-        }  
+    if paper_content:
+        agent_config = {
+            "concept_analysis": [],  # Removed brave as it's commented out in config
+            "algorithm_analysis": [],  # Removed brave as it's commented out in config
+            "code_planner": [],  # Removed brave as it's commented out in config
+        }
+    else:
+        agent_config = {
+            "concept_analysis": ["filesystem"],
+            "algorithm_analysis": ["filesystem"],  # Removed brave as it's commented out in config
+            "code_planner": ["filesystem"],  # Removed brave as it's commented out in config
+        }
   
     print(f"   Agent configurations: {agent_config}")  
   
@@ -754,16 +757,22 @@ You may use web search (brave_web_search) if you need clarification on algorithm
   
 Please locate and analyze the markdown (.md) file containing the research paper."""  
   
-    # STEP 5: Execute based on planning mode  
-    if planning_mode == "sequential":  
-        return await _run_sequential_analysis(  
-            base_message, agent_config, prompts, enhanced_params,   
-            max_iterations, tool_filter, logger  
-        )  
-    else:  
-        return await _run_parallel_analysis(  
-            paper_dir, agent_config, prompts, enhanced_params, logger  
-        )  
+    # STEP 5: Execute based on execution mode
+    if execution_mode == "sequential":
+        return await _run_sequential_analysis(
+            base_message, agent_config, prompts, enhanced_params,
+            max_iterations, tool_filter, logger
+        )
+    elif execution_mode == "parallel":
+        return await _run_parallel_analysis(
+            paper_dir, agent_config, prompts, enhanced_params, logger
+        )
+    else:
+        print(f"⚠️ Unknown execution_mode '{execution_mode}', defaulting to sequential")
+        return await _run_sequential_analysis(
+            base_message, agent_config, prompts, enhanced_params,
+            max_iterations, tool_filter, logger
+        )
   
   
 async def _run_parallel_analysis(  
@@ -1079,7 +1088,7 @@ async def _process_input_source(input_source: str, logger) -> str:
         return file_path
     return input_source
 
-@weave.op
+@tracker.trace
 async def orchestrate_research_analysis_agent(
     input_source: str, logger, progress_callback: Optional[Callable] = None
 ) -> Tuple[str, str]:
@@ -1117,7 +1126,7 @@ async def orchestrate_research_analysis_agent(
 
     return analysis_result, download_result
 
-@weave.op
+@tracker.trace
 async def synthesize_workspace_infrastructure_agent(
     download_result: str, logger, workspace_dir: Optional[str] = None
 ) -> Dict[str, str]:
@@ -1160,7 +1169,7 @@ async def synthesize_workspace_infrastructure_agent(
         "workspace_dir": workspace_dir,
     }
 
-@weave.op
+@tracker.trace
 async def orchestrate_reference_intelligence_agent(
     dir_info: Dict[str, str], logger, progress_callback: Optional[Callable] = None
 ) -> str:
@@ -1199,7 +1208,7 @@ async def orchestrate_reference_intelligence_agent(
 
     return reference_result
 
-@weave.op
+@tracker.trace
 async def orchestrate_document_preprocessing_agent(
     dir_info: Dict[str, str], logger
 ) -> Dict[str, Any]:
@@ -1341,7 +1350,7 @@ async def orchestrate_document_preprocessing_agent(
             "error_message": str(e),
         }
 
-@weave.op
+@tracker.trace
 async def orchestrate_code_planning_agent(
     dir_info: Dict[str, str], logger, progress_callback: Optional[Callable] = None
 ):
@@ -1374,7 +1383,7 @@ async def orchestrate_code_planning_agent(
             f.write(initial_plan_result)
         print(f"Initial plan saved to {initial_plan_path}")
 
-@weave.op
+@tracker.trace
 async def automate_repository_acquisition_agent(
     reference_result: str,
     dir_info: Dict[str, str],
@@ -1448,7 +1457,7 @@ async def automate_repository_acquisition_agent(
         print(f"GitHub download error saved to {dir_info['download_path']}")
         raise e  # Re-raise to be handled by the main pipeline
 
-@weave.op
+@tracker.trace
 async def orchestrate_codebase_intelligence_agent(
     dir_info: Dict[str, str], logger, progress_callback: Optional[Callable] = None
 ) -> Dict:
@@ -1575,7 +1584,7 @@ async def orchestrate_codebase_intelligence_agent(
 
         return error_report
 
-@weave.op
+@tracker.trace
 async def synthesize_code_implementation_agent(
     dir_info: Dict[str, str],
     logger,
@@ -1769,7 +1778,7 @@ Please provide a detailed implementation plan that covers all aspects needed for
         print(f"Exception details: {type(e).__name__}: {str(e)}")
         raise
 
-@weave.op
+@tracker.trace
 async def execute_multi_agent_research_pipeline(
     input_source: str,
     logger,

@@ -28,6 +28,9 @@ site/
 log/
 logs/
 
+# Ignore default wandb logs directory
+wandb/
+
 # Caches
 .cache/
 .mypy_cache/

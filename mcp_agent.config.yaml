@@ -5,7 +5,9 @@ document_segmentation:
   enabled: false
   size_threshold_chars: 50000
 execution_engine: asyncio
-planning_mode: "sequential"  # Options: "parallel" or "sequential"
+execution_mode: "parallel"  # Options: "parallel" or "sequential" (use sequential for cloud providers with rate limits)
+tool_calling:  
+  cerebras_compatibility: false  # Enable for Cerebras and similar providers (use str not dict for tool calls)
 logger:
   level: info
   path_settings:
@@ -16,6 +18,14 @@ logger:
   transports:
   - console
   - file
+experiment_tracking:  
+    enabled: false  # Set to false to disable all tracking  
+    provider: "wandb_weave"  # Options: "console", "wandb_weave" 
+    weave:  
+      project: "deepcode-experiments"  
+    #wandb:  
+      #project: "deepcode-experiments"  
+      #entity: null  # Optional W&B entity
 mcp:
   servers:
     # bocha-mcp:
@@ -53,7 +63,6 @@ mcp:
       # - C:/Users/LEGION/AppData/Roaming/npm/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js
       # - .
       # command: node
-
 
     code-implementation:
       args:
@@ -125,4 +134,5 @@ anthropic:
   default_model: "claude-sonnet-4.5"
 
 planning_mode: traditional
+
 otlp_endpoint: "http://localhost:4317"

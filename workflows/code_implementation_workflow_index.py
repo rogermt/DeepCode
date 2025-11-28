@@ -35,6 +35,10 @@ from workflows.agents.memory_agent_concise import ConciseMemoryAgent
 from config.mcp_tool_definitions_index import get_mcp_tools
 from utils.llm_utils import get_preferred_llm_class, get_default_models
 # DialogueLogger removed - no longer needed
+from utils.patch_utils import apply_cerebras_patch
+
+# Apply compatibility patches before any LLM calls
+apply_cerebras_patch()
 
 
 class CodeImplementationWorkflowWithIndex:
@@ -993,8 +997,6 @@ Requirements:
 
         openai_messages = [{"role": "system", "content": system_message}]
         openai_messages.extend(messages)
-
-        e=1/0
 
         for message in openai_messages:  
             if message.get("role") == "tool":  
