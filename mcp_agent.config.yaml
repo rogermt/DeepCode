@@ -5,6 +5,8 @@ document_segmentation:
   enabled: false
   size_threshold_chars: 50000
 execution_engine: asyncio
+tool_calling:  
+  cerebras_compatibility: true  # Enable for Cerebras and similar providers (use str not dict for tool calls)
 logger:
   level: info
   path_settings:
