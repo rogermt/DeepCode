@@ -1,13 +1,13 @@
 $schema: ./schema/mcp-agent.config.schema.json
 anthropic: null
-default_search_server: bocha-mcp
+default_search_server: searxng  #brave or bocha-mcp or searxng
 document_segmentation:
   enabled: false
   size_threshold_chars: 50000
 execution_engine: asyncio
-execution_mode: "parallel"  # Options: "parallel" or "sequential" (use sequential for cloud providers with rate limits)
+execution_mode: "sequential"  # Options: "parallel" or "sequential" (use sequential for cloud providers with rate limits)
 tool_calling:  
-  cerebras_compatibility: false  # Enable for Cerebras and similar providers (use str not dict for tool calls)
+  cerebras_compatibility: true  # Enable for Cerebras and similar providers (use str not dict for tool calls)
 logger:
   level: info
   path_settings:
@@ -26,21 +26,32 @@ experiment_tracking:
     #wandb:  
       #project: "deepcode-experiments"  
       #entity: null  # Optional W&B entity
-mcp:
-  servers:
-    # bocha-mcp:
-    #   args:
-    #   - tools/bocha_search_server.py
-    #   command: python3
-    #   env:
-    #     BOCHA_API_KEY: ''
-    #     PYTHONPATH: .
-    # brave:
-    #   # macos and linux should use this
-    #   args:
-    #   - -y
-    #   - '@modelcontextprotocol/server-brave-search'
-    #   command: npx
+mcp:  
+  servers:  
+    bocha-mcp:  
+      args:  
+        - tools/bocha_search_server.py  
+      command: python3  
+      env:  
+        BOCHA_API_KEY: ''  
+        PYTHONPATH: .  
+      
+    # SearXNG-based search server (free, no API key)  
+    searxng:  
+      args:  
+      - tools/searxng_search_server.py  
+      command: python3  
+      env:
+        SEARXNG_URL: 'http://localhost:8888'  
+        PYTHONPATH: . 
+      
+    brave:  
+      args:  
+        - -y  
+        - '@modelcontextprotocol/server-brave-search'  
+      command: npx  
+      env:  
+        BRAVE_API_KEY: ''
 
     #   # windows should use this
     #   # args:
