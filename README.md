@@ -388,6 +388,7 @@ DeepCode leverages the **Model Context Protocol (MCP)** standard to seamlessly i
 |-------------------|-------------------------|-------------------------------|
 | **🔍 brave** | Web Search Engine | Real-time information retrieval via Brave Search API |
 | **🌐 bocha-mcp** | Alternative Search | Secondary search option with independent API access |
+| **🔍 searxng** | Local Search Instance | Privacy-focused web search with local SearXNG. Free, configurable, no API keys.|
 | **📂 filesystem** | File System Operations | Local file and directory management, read/write operations |
 | **🌐 fetch** | Web Content Retrieval | Fetch and extract content from URLs and web resources |
 | **📥 github-downloader** | Repository Management | Clone and download GitHub repositories for analysis |
