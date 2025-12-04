@@ -524,7 +524,19 @@ Implementation Generation • Testing • Documentation
 
 ## 🚀 Quick Start
 
+---
 
+## ⚠️ Note for Custom Fork Users
+
+This fork maintains a `custom-main` branch that includes additional features required for runtime:
+
+- ✅ Weave + Cerebras integration (compatibility fixes, observability wrapper)
+- ✅ SearXNG search functionality
+
+When running from source, make sure you are on the `custom-main` branch:
+
+```bash
+git checkout custom-main
 
 ### 📦 **Step 1: Installation**
 
